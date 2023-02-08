@@ -13,7 +13,6 @@ import (
 func TestConversion(t *testing.T) {
 	// Test converting to and from v1alpha1
 	subscriptionV2 := v2alpha1.Subscription{
-		Scopes: []string{"app1", "app2"},
 		Spec: v2alpha1.SubscriptionSpec{
 			Pubsubname: "testPubSub",
 			Topic:      "topicName",
@@ -22,12 +21,6 @@ func TestConversion(t *testing.T) {
 			},
 			Routes: v2alpha1.Routes{
 				Default: "testPath",
-			},
-			DeadLetterTopic: "testDeadLetterTopic",
-			BulkSubscribe: v2alpha1.BulkSubscribe{
-				Enabled:            true,
-				MaxMessagesCount:   10,
-				MaxAwaitDurationMs: 1000,
 			},
 		},
 	}

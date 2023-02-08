@@ -1,47 +1,25 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package config
 
-// ApplicationConfig is an optional config supplied by user code.
+// ApplicationConfig 应用程序提供的配置
 type ApplicationConfig struct {
-	Entities []string `json:"entities"`
-	// Duration. example: "1h".
+	Entities []string `json:"entities"` // 实体
+	// Duration. example: "1h" Actor空闲时间
 	ActorIdleTimeout string `json:"actorIdleTimeout"`
-	// Duration. example: "30s". This value is global.
+	// Duration. example: "30s" Actor扫描间隔
 	ActorScanInterval string `json:"actorScanInterval"`
-	// Duration. example: "30s".
+	// Duration. example: "30s" 调用超时
 	DrainOngoingCallTimeout    string           `json:"drainOngoingCallTimeout"`
-	DrainRebalancedActors      bool             `json:"drainRebalancedActors"`
+	DrainRebalancedActors      bool             `json:"drainRebalancedActors"` // 重新平衡Actor
 	Reentrancy                 ReentrancyConfig `json:"reentrancy,omitempty"`
-	RemindersStoragePartitions int              `json:"remindersStoragePartitions"`
-
-	// Duplicate of the above config so we can assign it to individual entities.
-	EntityConfigs []EntityConfig `json:"entitiesConfig,omitempty"`
+	RemindersStoragePartitions int              `json:"remindersStoragePartitions"` // 提醒者 存储分区
 }
 
 type ReentrancyConfig struct {
 	Enabled       bool `json:"enabled"`
-	MaxStackDepth *int `json:"maxStackDepth,omitempty"`
-}
-
-type EntityConfig struct {
-	Entities []string `json:"entities"`
-	// Duration. example: "1h".
-	ActorIdleTimeout string `json:"actorIdleTimeout"`
-	// Duration. example: "30s".
-	DrainOngoingCallTimeout    string           `json:"drainOngoingCallTimeout"`
-	DrainRebalancedActors      bool             `json:"drainRebalancedActors"`
-	Reentrancy                 ReentrancyConfig `json:"reentrancy,omitempty"`
-	RemindersStoragePartitions int              `json:"remindersStoragePartitions"`
+	MaxStackDepth *int `json:"maxStackDepth,omitempty"` // 最大栈深度
 }

@@ -7,25 +7,14 @@ spec:
     defaultAction: deny
     trustDomain: "public"
     policies:
-      - appId: "allowlists-caller"
-        defaultAction: deny
-        trustDomain: 'public'
-        namespace: "dapr-tests"
-        operations:
-          - name: grpcToGrpcTest
-            httpVerb: [ '*' ]
-            action: allow
-          - name: httpToGrpcTest
-            httpVerb: [ "*" ]
-            action: deny
-          - name: grpcToGrpcWithoutVerbTest
-            action: allow
-      - appId: "grpcproxyclient"
-        defaultAction: deny
-        trustDomain: 'public'
-        namespace: "dapr-tests"
-        operations:
-          - name: /helloworld.Greeter/SayHello
-            action: allow
-          - name: /helloworld.Greeter/SayGoodbye
-            action: allow
+    - appId:  "allowlists-caller"
+      defaultAction: deny
+      trustDomain: 'public'
+      namespace: "dapr-tests"
+      operations:
+      - name: grpcToGrpcTest
+        httpVerb: ['*']
+        action: allow
+      - name: httpToGrpcTest
+        httpVerb: ["*"]
+        action: deny

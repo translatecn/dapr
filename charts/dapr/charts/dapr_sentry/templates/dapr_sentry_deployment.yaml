@@ -6,9 +6,6 @@ metadata:
   name: dapr-trust-bundle
   labels:
     app: dapr-sentry
-    {{- range $key, $value := .Values.global.k8sLabels }}
-    {{ $key }}: {{ tpl $value $ }}
-    {{- end }}
 data:
   {{ if .Values.tls.issuer.certPEM }}issuer.crt: {{ b64enc .Values.tls.issuer.certPEM | trim }}
   {{ else if $existingSecret }}issuer.crt: {{ index $existingSecret.data "issuer.crt" }}
@@ -26,9 +23,6 @@ metadata:
   name: dapr-sentry
   labels:
     app: dapr-sentry
-    {{- range $key, $value := .Values.global.k8sLabels }}
-    {{ $key }}: {{ tpl $value $ }}
-    {{- end }}
 spec:
 {{- if eq .Values.global.ha.enabled true }}
   replicas: {{ .Values.global.ha.replicaCount }}
@@ -42,9 +36,11 @@ spec:
     metadata:
       labels:
         app: dapr-sentry
-        {{- range $key, $value := .Values.global.k8sLabels }}
-        {{ $key }}: {{ tpl $value $ }}
-        {{- end }}
+        app.kubernetes.io/name: {{ .Release.Name }}
+        app.kubernetes.io/version: {{ .Values.global.tag }}
+        app.kubernetes.io/component: sentry
+        app.kubernetes.io/part-of: "dapr"
+        app.kubernetes.io/managed-by: "helm"
         {{- with .Values.global.labels }}
           {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -55,6 +51,18 @@ spec:
         prometheus.io/path: "/"
 {{- end }}
     spec:
+{{- if eq .Values.global.ha.enabled true }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - dapr-sentry
+            topologyKey: "kubernetes.io/hostname"
+{{- end }}
       containers:
       - name: dapr-sentry
         livenessProbe:
@@ -62,27 +70,27 @@ spec:
             path: /healthz
             port: 8080
           {{- if eq .Values.debug.enabled false }}
-          initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+          initialDelaySeconds: 3
           {{- else }}
           initialDelaySeconds: {{ .Values.debug.initialDelaySeconds }}
           {{- end }}
-          periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
-          failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          periodSeconds: 3
+          failureThreshold: 5
         readinessProbe:
           httpGet:
             path: /healthz
             port: 8080
           {{- if eq .Values.debug.enabled false }}
-          initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+          initialDelaySeconds: 3
           {{- else }}
           initialDelaySeconds: {{ .Values.debug.initialDelaySeconds }}
           {{- end }}
-          periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
-          failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          periodSeconds: 3
+          failureThreshold: 5
 {{- if contains "/" .Values.image.name }}
         image: "{{ .Values.image.name }}"
 {{- else }}
-        image: "{{ .Values.global.registry }}/{{ .Values.image.name }}:{{ .Values.global.tag }}"
+        image: "{{ .Values.global.registry }}/dapr:{{ .Values.global.tag }}"
 {{- end }}
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
 {{- if eq .Values.global.daprControlPlaneOs "linux" }}
@@ -148,19 +156,7 @@ spec:
 {{- end }}
         - "--trust-domain"
         - {{ .Values.tls.trustDomain }}
-{{- if .Values.tokenAudience }}
-        - "--token-audience"
-        - {{ .Values.tokenAudience }}
-{{- end }}
-{{- with .Values.global.issuerFilenames }}
-        - "--issuer-ca-filename"
-        - "{{ .ca }}"
-        - "--issuer-certificate-filename"
-        - "{{ .cert }}"
-        - "--issuer-key-filename"
-        - "{{ .key }}"
-{{- end }}
-      serviceAccountName: dapr-sentry
+      serviceAccountName: dapr-operator
       volumes:
         - name: credentials
           secret:

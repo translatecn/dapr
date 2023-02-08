@@ -1,22 +1,11 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
-//nolint:forbidigo
 package http
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"runtime"
 	"strings"
@@ -31,19 +20,15 @@ import (
 
 	"github.com/dapr/dapr/pkg/config"
 	"github.com/dapr/dapr/pkg/cors"
-	httpMiddleware "github.com/dapr/dapr/pkg/middleware/http"
+	http_middleware "github.com/dapr/dapr/pkg/middleware/http"
 	dapr_testing "github.com/dapr/dapr/pkg/testing"
-	"github.com/dapr/kit/logger"
 )
 
 type mockHost struct {
 	hasCORS bool
 }
 
-const (
-	healthzEndpoint         = "healthz"
-	healthzOutboundEndpoint = "healthz/outbound"
-)
+const healthzEndpoint = "healthz"
 
 func (m *mockHost) mockHandler() fasthttp.RequestHandler {
 	return func(ctx *fasthttp.RequestCtx) {
@@ -97,10 +82,9 @@ func TestAllowedAPISpec(t *testing.T) {
 
 		for _, e := range allOtherEndpoints {
 			valid := s.endpointAllowed(e)
-			switch e.Route {
-			case healthzEndpoint, healthzOutboundEndpoint:
+			if e.Route == healthzEndpoint {
 				assert.True(t, valid)
-			default:
+			} else {
 				assert.False(t, valid)
 			}
 		}
@@ -113,11 +97,6 @@ func TestAllowedAPISpec(t *testing.T) {
 					{
 						Name:     "publish",
 						Version:  "v1.0",
-						Protocol: "http",
-					},
-					{
-						Name:     "publish",
-						Version:  "v1.0-alpha1",
 						Protocol: "http",
 					},
 				},
@@ -144,10 +123,9 @@ func TestAllowedAPISpec(t *testing.T) {
 
 		for _, e := range allOtherEndpoints {
 			valid := s.endpointAllowed(e)
-			switch e.Route {
-			case healthzEndpoint, healthzOutboundEndpoint:
+			if e.Route == healthzEndpoint {
 				assert.True(t, valid)
-			default:
+			} else {
 				assert.False(t, valid)
 			}
 		}
@@ -186,10 +164,9 @@ func TestAllowedAPISpec(t *testing.T) {
 
 		for _, e := range allOtherEndpoints {
 			valid := s.endpointAllowed(e)
-			switch e.Route {
-			case healthzEndpoint, healthzOutboundEndpoint:
+			if e.Route == healthzEndpoint {
 				assert.True(t, valid)
-			default:
+			} else {
 				assert.False(t, valid)
 			}
 		}
@@ -228,10 +205,9 @@ func TestAllowedAPISpec(t *testing.T) {
 
 		for _, e := range allOtherEndpoints {
 			valid := s.endpointAllowed(e)
-			switch e.Route {
-			case healthzEndpoint, healthzOutboundEndpoint:
+			if e.Route == healthzEndpoint {
 				assert.True(t, valid)
-			default:
+			} else {
 				assert.False(t, valid)
 			}
 		}
@@ -270,10 +246,9 @@ func TestAllowedAPISpec(t *testing.T) {
 
 		for _, e := range allOtherEndpoints {
 			valid := s.endpointAllowed(e)
-			switch e.Route {
-			case healthzEndpoint, healthzOutboundEndpoint:
+			if e.Route == healthzEndpoint {
 				assert.True(t, valid)
-			default:
+			} else {
 				assert.False(t, valid)
 			}
 		}
@@ -312,10 +287,9 @@ func TestAllowedAPISpec(t *testing.T) {
 
 		for _, e := range allOtherEndpoints {
 			valid := s.endpointAllowed(e)
-			switch e.Route {
-			case healthzEndpoint, healthzOutboundEndpoint:
+			if e.Route == healthzEndpoint {
 				assert.True(t, valid)
-			default:
+			} else {
 				assert.False(t, valid)
 			}
 		}
@@ -354,10 +328,9 @@ func TestAllowedAPISpec(t *testing.T) {
 
 		for _, e := range allOtherEndpoints {
 			valid := s.endpointAllowed(e)
-			switch e.Route {
-			case healthzEndpoint, healthzOutboundEndpoint:
+			if e.Route == healthzEndpoint {
 				assert.True(t, valid)
-			default:
+			} else {
 				assert.False(t, valid)
 			}
 		}
@@ -675,189 +648,13 @@ func TestAliasRoute(t *testing.T) {
 	})
 }
 
-func TestAPILogging(t *testing.T) {
-	// Replace the logger with a custom one for testing
-	prev := infoLog
-	logDest := &bytes.Buffer{}
-	infoLog = logger.NewLogger("test-api-logging")
-	infoLog.EnableJSONOutput(true)
-	infoLog.SetOutput(logDest)
-	defer func() {
-		infoLog = prev
-	}()
-
-	body := []byte("👋")
-
-	mh := func(reqCtx *fasthttp.RequestCtx) {
-		reqCtx.Response.SetBody(body)
-	}
-	endpoints := []Endpoint{
-		{
-			Methods: []string{fasthttp.MethodGet, fasthttp.MethodPost},
-			Route:   "state/{storeName}/{key}",
-			Version: apiVersionV1,
-			Handler: mh,
-		},
-	}
-	srv := newServer()
-	srv.config.EnableAPILogging = true
-	router := srv.getRouter(endpoints)
-
-	r := &fasthttp.RequestCtx{
-		Request: fasthttp.Request{},
-	}
-	dec := json.NewDecoder(logDest)
-
-	runTest := func(userAgent string) func(t *testing.T) {
-		return func(t *testing.T) {
-			r.Request.Header.Set("User-Agent", userAgent)
-
-			for _, e := range endpoints {
-				routePath := fmt.Sprintf("/%s/%s", e.Version, e.Route)
-				path := fmt.Sprintf("/%s/%s", e.Version, "state/mystate/mykey")
-				for _, m := range e.Methods {
-					handler, _ := router.Lookup(m, path, r)
-					r.Request.Header.SetMethod(m)
-					handler(r)
-
-					assert.Equal(t, body, r.Response.Body())
-
-					logData := map[string]string{}
-					err := dec.Decode(&logData)
-					require.NoError(t, err)
-
-					assert.Equal(t, "test-api-logging", logData["scope"])
-					assert.Equal(t, "HTTP API Called", logData["msg"])
-					assert.Equal(t, m+" "+routePath, logData["method"])
-					if userAgent != "" {
-						assert.Equal(t, userAgent, logData["useragent"])
-					} else {
-						_, found := logData["useragent"]
-						assert.False(t, found)
-					}
-				}
-			}
-		}
-	}
-
-	t.Run("without user agent", runTest(""))
-	t.Run("with user agent", runTest("daprtest/1"))
-}
-
-func TestAPILoggingOmitHealthChecks(t *testing.T) {
-	// Replace the logger with a custom one for testing
-	prev := infoLog
-	logDest := &bytes.Buffer{}
-	infoLog = logger.NewLogger("test-api-logging")
-	infoLog.EnableJSONOutput(true)
-	infoLog.SetOutput(logDest)
-	defer func() {
-		infoLog = prev
-	}()
-
-	body := []byte("👋")
-
-	mh := func(reqCtx *fasthttp.RequestCtx) {
-		reqCtx.Response.SetBody(body)
-	}
-	endpoints := []Endpoint{
-		{
-			Methods:       []string{fasthttp.MethodGet},
-			Route:         "log",
-			Version:       apiVersionV1,
-			Handler:       mh,
-			IsHealthCheck: false,
-		},
-		{
-			Methods:       []string{fasthttp.MethodGet},
-			Route:         "nolog",
-			Version:       apiVersionV1,
-			Handler:       mh,
-			IsHealthCheck: true,
-		},
-	}
-	srv := newServer()
-	srv.config.EnableAPILogging = true
-	srv.config.APILogHealthChecks = false
-	router := srv.getRouter(endpoints)
-
-	r := &fasthttp.RequestCtx{
-		Request: fasthttp.Request{},
-	}
-	dec := json.NewDecoder(logDest)
-
-	for _, e := range endpoints {
-		path := fmt.Sprintf("/%s/%s", e.Version, e.Route)
-		handler, _ := router.Lookup(fasthttp.MethodGet, path, r)
-		r.Request.Header.SetMethod(fasthttp.MethodGet)
-		handler(r)
-
-		assert.Equal(t, body, r.Response.Body())
-
-		if e.Route == "log" {
-			logData := map[string]string{}
-			err := dec.Decode(&logData)
-			require.NoError(t, err)
-
-			assert.Equal(t, "test-api-logging", logData["scope"])
-			assert.Equal(t, "HTTP API Called", logData["msg"])
-			assert.Equal(t, "GET "+path, logData["method"])
-		} else {
-			require.Empty(t, logDest.Bytes())
-		}
-	}
-}
-
 func TestClose(t *testing.T) {
-	t.Run("test close with api logging enabled", func(t *testing.T) {
-		port, err := freeport.GetFreePort()
-		require.NoError(t, err)
-		serverConfig := ServerConfig{
-			AppID:              "test",
-			HostAddress:        "127.0.0.1",
-			Port:               port,
-			APIListenAddresses: []string{"127.0.0.1"},
-			MaxRequestBodySize: 4,
-			ReadBufferSize:     4,
-			EnableAPILogging:   true,
-		}
-		a := &api{}
-		server := NewServer(NewServerOpts{
-			API:         a,
-			Config:      serverConfig,
-			TracingSpec: config.TracingSpec{},
-			MetricSpec:  config.MetricSpec{},
-			Pipeline:    httpMiddleware.Pipeline{},
-			APISpec:     config.APISpec{},
-		})
-		require.NoError(t, server.StartNonBlocking())
-		dapr_testing.WaitForListeningAddress(t, 5*time.Second, fmt.Sprintf("127.0.0.1:%d", port))
-		assert.NoError(t, server.Close())
-	})
-
-	t.Run("test close with api logging disabled", func(t *testing.T) {
-		port, err := freeport.GetFreePort()
-		require.NoError(t, err)
-		serverConfig := ServerConfig{
-			AppID:              "test",
-			HostAddress:        "127.0.0.1",
-			Port:               port,
-			APIListenAddresses: []string{"127.0.0.1"},
-			MaxRequestBodySize: 4,
-			ReadBufferSize:     4,
-			EnableAPILogging:   false,
-		}
-		a := &api{}
-		server := NewServer(NewServerOpts{
-			API:         a,
-			Config:      serverConfig,
-			TracingSpec: config.TracingSpec{},
-			MetricSpec:  config.MetricSpec{},
-			Pipeline:    httpMiddleware.Pipeline{},
-			APISpec:     config.APISpec{},
-		})
-		require.NoError(t, server.StartNonBlocking())
-		dapr_testing.WaitForListeningAddress(t, 5*time.Second, fmt.Sprintf("127.0.0.1:%d", port))
-		assert.NoError(t, server.Close())
-	})
+	port, err := freeport.GetFreePort()
+	require.NoError(t, err)
+	serverConfig := NewServerConfig("test", "127.0.0.1", port, []string{"127.0.0.1"}, nil, 0, "", false, 4, "", 4, false)
+	a := &api{}
+	server := NewServer(a, serverConfig, config.TracingSpec{}, config.MetricSpec{}, http_middleware.Pipeline{}, config.APISpec{})
+	require.NoError(t, server.StartNonBlocking())
+	dapr_testing.WaitForListeningAddress(t, 5*time.Second, fmt.Sprintf("127.0.0.1:%d", port))
+	assert.NoError(t, server.Close())
 }

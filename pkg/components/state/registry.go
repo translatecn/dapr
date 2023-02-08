@@ -1,84 +1,74 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package state
 
 import (
-	"fmt"
 	"strings"
+
+	"github.com/pkg/errors"
 
 	"github.com/dapr/components-contrib/state"
 	"github.com/dapr/dapr/pkg/components"
-	"github.com/dapr/kit/logger"
 )
 
-// Registry is an interface for a component that returns registered state store implementations.
-type Registry struct {
-	Logger      logger.Logger
-	stateStores map[string]func(logger.Logger) state.Store
+type State struct {
+	Name          string
+	FactoryMethod func() state.Store
 }
 
-// DefaultRegistry is the singleton with the registry.
-var DefaultRegistry *Registry = NewRegistry()
+func New(name string, factoryMethod func() state.Store) State {
+	return State{
+		Name:          name,
+		FactoryMethod: factoryMethod,
+	}
+}
+
+// Registry 是一个组件的接口，用于返回注册的状态存储实现。
+type Registry interface {
+	Register(components ...State)
+	Create(name, version string) (state.Store, error)
+}
+
+type stateStoreRegistry struct {
+	stateStores map[string]func() state.Store
+}
 
 // NewRegistry is used to create state store registry.
-func NewRegistry() *Registry {
-	return &Registry{
-		stateStores: map[string]func(logger.Logger) state.Store{},
+func NewRegistry() Registry {
+	return &stateStoreRegistry{
+		stateStores: map[string]func() state.Store{},
 	}
 }
 
-// RegisterComponent adds a new state store to the registry.
-func (s *Registry) RegisterComponent(componentFactory func(logger.Logger) state.Store, names ...string) {
-	for _, name := range names {
-		s.stateStores[createFullName(name)] = componentFactory
+// // Register registers a new factory method that creates an instance of a StateStore.
+// // The key is the name of the state store, eg. redis.
+func (s *stateStoreRegistry) Register(components ...State) {
+	for _, component := range components {
+		s.stateStores[createFullName(component.Name)] = component.FactoryMethod
 	}
 }
 
-func (s *Registry) Create(name, version, logName string) (state.Store, error) {
-	if method, ok := s.getStateStore(name, version, logName); ok {
+func (s *stateStoreRegistry) Create(name, version string) (state.Store, error) {
+	if method, ok := s.getStateStore(name, version); ok {
 		return method(), nil
 	}
-	return nil, fmt.Errorf("couldn't find state store %s/%s", name, version)
+	return nil, errors.Errorf("couldn't find state store %s/%s", name, version)
 }
 
-func (s *Registry) getStateStore(name, version, logName string) (func() state.Store, bool) {
+func (s *stateStoreRegistry) getStateStore(name, version string) (func() state.Store, bool) {
 	nameLower := strings.ToLower(name)
 	versionLower := strings.ToLower(version)
 	stateStoreFn, ok := s.stateStores[nameLower+"/"+versionLower]
 	if ok {
-		return s.wrapFn(stateStoreFn, logName), true
+		return stateStoreFn, true
 	}
 	if components.IsInitialVersion(versionLower) {
 		stateStoreFn, ok = s.stateStores[nameLower]
-		if ok {
-			return s.wrapFn(stateStoreFn, logName), true
-		}
 	}
-
-	return nil, false
-}
-
-func (s *Registry) wrapFn(componentFactory func(logger.Logger) state.Store, logName string) func() state.Store {
-	return func() state.Store {
-		l := s.Logger
-		if logName != "" && l != nil {
-			l = l.WithFields(map[string]any{
-				"component": logName,
-			})
-		}
-		return componentFactory(l)
-	}
+	return stateStoreFn, ok
 }
 
 func createFullName(name string) string {

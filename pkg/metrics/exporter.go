@@ -1,11 +1,11 @@
 package metrics
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 
 	ocprom "contrib.go.opencensus.io/exporter/prometheus"
+	"github.com/pkg/errors"
 	prom "github.com/prometheus/client_golang/prometheus"
 
 	"github.com/dapr/kit/logger"
@@ -25,9 +25,9 @@ type Exporter interface {
 	Options() *Options
 }
 
-// NewExporter creates new MetricsExporter instance.
+// NewExporter 创建新的MetricsExporter实例。
 func NewExporter(namespace string) Exporter {
-	// TODO: support multiple exporters
+	// TODO: 支持多个 exporters
 	return &promMetricsExporter{
 		&exporter{
 			namespace: namespace,
@@ -50,13 +50,13 @@ func (m *exporter) Options() *Options {
 	return m.options
 }
 
-// promMetricsExporter is prometheus metric exporter.
+// promMetricsExporter 普罗米修斯米指标 exporter.
 type promMetricsExporter struct {
 	*exporter
 	ocExporter *ocprom.Exporter
 }
 
-// Init initializes opencensus exporter.
+// Init 初始化 opencensus exporter.
 func (m *promMetricsExporter) Init() error {
 	if !m.exporter.Options().MetricsEnabled {
 		return nil
@@ -67,14 +67,14 @@ func (m *promMetricsExporter) Init() error {
 		Namespace: m.namespace,
 		Registry:  prom.DefaultRegisterer.(*prom.Registry),
 	}); err != nil {
-		return fmt.Errorf("failed to create Prometheus exporter: %w", err)
+		return errors.Errorf("failed to create Prometheus exporter: %v", err)
 	}
 
-	// start metrics server
+	// 启动 metrics 服务
 	return m.startMetricServer()
 }
 
-// startMetricServer starts metrics server.
+// startMetricServer 启动指标服务
 func (m *promMetricsExporter) startMetricServer() error {
 	if !m.exporter.Options().MetricsEnabled {
 		// skip if metrics is not enabled
@@ -92,7 +92,6 @@ func (m *promMetricsExporter) startMetricServer() error {
 		mux := http.NewServeMux()
 		mux.Handle(defaultMetricsPath, m.ocExporter)
 
-		//nolint:gosec
 		if err := http.ListenAndServe(addr, mux); err != nil {
 			m.exporter.logger.Fatalf("failed to start metrics server: %v", err)
 		}

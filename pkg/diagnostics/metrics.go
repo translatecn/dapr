@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package diagnostics
 
@@ -18,34 +10,25 @@ import (
 
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
-
-	"github.com/dapr/dapr/pkg/config"
-	"github.com/dapr/dapr/pkg/diagnostics/utils"
 )
 
-// appIDKey is a tag key for App ID.
+// appIDKey 类型转换
 var appIDKey = tag.MustNewKey("app_id")
 
 var (
-	// DefaultReportingPeriod is the default view reporting period.
+	// DefaultReportingPeriod 汇报周期
 	DefaultReportingPeriod = 1 * time.Minute
 
-	// DefaultMonitoring holds service monitoring metrics definitions.
+	// DefaultMonitoring  持有服务监控指标的定义。
 	DefaultMonitoring = newServiceMetrics()
-	// DefaultGRPCMonitoring holds default gRPC monitoring handlers and middlewares.
+	// DefaultGRPCMonitoring 持有默认的gRPC监控处理程序和中间件。
 	DefaultGRPCMonitoring = newGRPCMetrics()
-	// DefaultHTTPMonitoring holds default HTTP monitoring handlers and middlewares.
+	// DefaultHTTPMonitoring 持有默认的HTTP监控处理程序和中间件。
 	DefaultHTTPMonitoring = newHTTPMetrics()
-	// DefaultComponentMonitoring holds component specific metrics.
-	DefaultComponentMonitoring = newComponentMetrics()
-	// DefaultResiliencyMonitoring holds resiliency specific metrics.
-	DefaultResiliencyMonitoring = newResiliencyMetrics()
-	// Rules holds regex expressions for metrics labels
-	Rules map[string]string
 )
 
-// InitMetrics initializes metrics.
-func InitMetrics(appID, namespace string, rules []config.MetricsRule) error {
+// InitMetrics 初始化指标
+func InitMetrics(appID string) error {
 	if err := DefaultMonitoring.Init(appID); err != nil {
 		return err
 	}
@@ -58,15 +41,8 @@ func InitMetrics(appID, namespace string, rules []config.MetricsRule) error {
 		return err
 	}
 
-	if err := DefaultComponentMonitoring.Init(appID, namespace); err != nil {
-		return err
-	}
-
-	if err := DefaultResiliencyMonitoring.Init(appID); err != nil {
-		return err
-	}
-
-	// Set reporting period of views
+	// 设置汇报周期
 	view.SetReportingPeriod(DefaultReportingPeriod)
-	return utils.CreateRulesMap(rules)
+
+	return nil
 }

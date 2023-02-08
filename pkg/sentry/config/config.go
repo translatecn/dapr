@@ -2,18 +2,17 @@ package config
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
 	"os"
-	"strings"
 	"time"
 
-	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/pkg/errors" // ok
+	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/dapr/kit/logger" // ok
 
 	scheme "github.com/dapr/dapr/pkg/client/clientset/versioned"
-	daprGlobalConfig "github.com/dapr/dapr/pkg/config"
-	"github.com/dapr/dapr/utils"
-	"github.com/dapr/kit/logger"
+	dapr_config "github.com/dapr/dapr/pkg/config"
+	"github.com/dapr/dapr/utils" // ok
 )
 
 const (
@@ -24,13 +23,13 @@ const (
 	defaultWorkloadCertTTL      = time.Hour * 24
 	defaultAllowedClockSkew     = time.Minute * 15
 
-	// defaultDaprSystemConfigName is the default resource object name for Dapr System Config.
+	// defaultDaprSystemConfigName
 	defaultDaprSystemConfigName = "daprsystem"
 )
 
 var log = logger.NewLogger("dapr.sentry.config")
 
-// SentryConfig holds the configuration for the Certificate Authority.
+// SentryConfig 认证证书配置
 type SentryConfig struct {
 	Port             int
 	TrustDomain      string
@@ -40,15 +39,6 @@ type SentryConfig struct {
 	RootCertPath     string
 	IssuerCertPath   string
 	IssuerKeyPath    string
-	Features         []daprGlobalConfig.FeatureSpec
-	TokenAudience    *string
-}
-
-func (c SentryConfig) GetTokenAudiences() (audiences []string) {
-	if c.TokenAudience != nil && *c.TokenAudience != "" {
-		audiences = strings.Split(*c.TokenAudience, ",")
-	}
-	return
 }
 
 var configGetters = map[string]func(string) (SentryConfig, error){
@@ -56,11 +46,11 @@ var configGetters = map[string]func(string) (SentryConfig, error){
 	kubernetesConfig: getKubernetesConfig,
 }
 
-// FromConfigName returns a Sentry configuration based on a configuration spec.
-// A default configuration is loaded in case of an error.
+// FromConfigName 返回一个基于配置规范的哨兵配置。在出现错误时，将加载一个默认配置。
 func FromConfigName(configName string) (SentryConfig, error) {
 	var confGetterFn func(string) (SentryConfig, error)
 
+	// 本代码中没有找到 KUBERNETES_SERVICE_HOST 的设置
 	if IsKubernetesHosted() {
 		confGetterFn = configGetters[kubernetesConfig]
 	} else {
@@ -69,7 +59,7 @@ func FromConfigName(configName string) (SentryConfig, error) {
 
 	conf, err := confGetterFn(configName)
 	if err != nil {
-		err = fmt.Errorf("loading default config. couldn't find config name '%s': %w", configName, err)
+		err = errors.Wrapf(err, "loading default config. couldn't find config name: %s", configName)
 		conf = getDefaultConfig()
 	}
 
@@ -86,6 +76,8 @@ func printConfig(config SentryConfig) {
 	log.Infof("configuration: [port]: %v, [ca store]: %s, [allowed clock skew]: %s, [workload cert ttl]: %s",
 		config.Port, caStore, config.AllowedClockSkew.String(), config.WorkloadCertTTL.String())
 }
+
+// 30
 
 func IsKubernetesHosted() bool {
 	return os.Getenv(kubernetesServiceHostEnvVar) != ""
@@ -108,7 +100,7 @@ func getKubernetesConfig(configName string) (SentryConfig, error) {
 		return defaultConfig, err
 	}
 
-	list, err := daprClient.ConfigurationV1alpha1().Configurations(metaV1.NamespaceAll).List(metaV1.ListOptions{})
+	list, err := daprClient.ConfigurationV1alpha1().Configurations(meta_v1.NamespaceAll).List(meta_v1.ListOptions{})
 	if err != nil {
 		return defaultConfig, err
 	}
@@ -121,10 +113,10 @@ func getKubernetesConfig(configName string) (SentryConfig, error) {
 		if i.GetName() == configName {
 			spec, _ := json.Marshal(i.Spec)
 
-			var configSpec daprGlobalConfig.ConfigurationSpec
+			var configSpec dapr_config.ConfigurationSpec
 			json.Unmarshal(spec, &configSpec)
 
-			conf := daprGlobalConfig.Configuration{
+			conf := dapr_config.Configuration{
 				Spec: configSpec,
 			}
 			return parseConfiguration(defaultConfig, &conf)
@@ -135,7 +127,8 @@ func getKubernetesConfig(configName string) (SentryConfig, error) {
 
 func getSelfhostedConfig(configName string) (SentryConfig, error) {
 	defaultConfig := getDefaultConfig()
-	daprConfig, _, err := daprGlobalConfig.LoadStandaloneConfiguration(configName)
+
+	daprConfig, _, err := dapr_config.LoadStandaloneConfiguration(configName)
 	if err != nil {
 		return defaultConfig, err
 	}
@@ -146,11 +139,22 @@ func getSelfhostedConfig(configName string) (SentryConfig, error) {
 	return defaultConfig, nil
 }
 
-func parseConfiguration(conf SentryConfig, daprConfig *daprGlobalConfig.Configuration) (SentryConfig, error) {
+func GetDefaultConfig(configName string) (SentryConfig, error) {
+	return getKubernetesConfig(configName)
+}
+
+func parseConfiguration(conf SentryConfig, daprConfig *dapr_config.Configuration) (SentryConfig, error) {
+	//spec:
+	//  metric:
+	//    enabled: true
+	//  mtls:
+	//    allowedClockSkew: 15m
+	//    enabled: true
+	//    workloadCertTTL: 24h
 	if daprConfig.Spec.MTLSSpec.WorkloadCertTTL != "" {
 		d, err := time.ParseDuration(daprConfig.Spec.MTLSSpec.WorkloadCertTTL)
 		if err != nil {
-			return conf, fmt.Errorf("error parsing WorkloadCertTTL duration: %w", err)
+			return conf, errors.Wrap(err, "error parsing WorkloadCertTTL duration")
 		}
 
 		conf.WorkloadCertTTL = d
@@ -159,13 +163,11 @@ func parseConfiguration(conf SentryConfig, daprConfig *daprGlobalConfig.Configur
 	if daprConfig.Spec.MTLSSpec.AllowedClockSkew != "" {
 		d, err := time.ParseDuration(daprConfig.Spec.MTLSSpec.AllowedClockSkew)
 		if err != nil {
-			return conf, fmt.Errorf("error parsing AllowedClockSkew duration: %w", err)
+			return conf, errors.Wrap(err, "error parsing AllowedClockSkew duration")
 		}
 
 		conf.AllowedClockSkew = d
 	}
-
-	conf.Features = daprConfig.Spec.Features
 
 	return conf, nil
 }

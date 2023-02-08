@@ -1,15 +1,7 @@
-/*
-Copyright 2022 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package injector
 
@@ -18,9 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	v1 "k8s.io/api/admission/v1"
@@ -30,11 +20,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/dapr/kit/logger" //ok
+
 	scheme "github.com/dapr/dapr/pkg/client/clientset/versioned"
-	"github.com/dapr/dapr/pkg/injector/monitoring"
-	"github.com/dapr/dapr/pkg/injector/sidecar"
-	"github.com/dapr/dapr/utils"
-	"github.com/dapr/kit/logger"
+	"github.com/dapr/dapr/pkg/injector/monitoring" //ok
+	"github.com/dapr/dapr/utils"                   //ok
 )
 
 const (
@@ -45,19 +35,18 @@ const (
 
 var log = logger.NewLogger("dapr.injector")
 
-var AllowedServiceAccountInfos = []string{
-	"replicaset-controller:kube-system",
-	"deployment-controller:kube-system",
-	"cronjob-controller:kube-system",
-	"job-controller:kube-system",
-	"statefulset-controller:kube-system",
-	"daemon-set-controller:kube-system",
-	"tekton-pipelines-controller:tekton-pipelines",
+var allowedControllersServiceAccounts = []string{
+	"replicaset-controller",
+	"deployment-controller",
+	"cronjob-controller",
+	"job-controller",
+	"statefulset-controller",
+	"daemon-set-controller",
 }
 
-// Injector is the interface for the Dapr runtime sidecar injection component.
+// Injector 是Dapr运行时sidecar注入组件的接口。
 type Injector interface {
-	Run(ctx context.Context, onReady func())
+	Run(ctx context.Context)
 }
 
 type injector struct {
@@ -69,9 +58,8 @@ type injector struct {
 	authUIDs     []string
 }
 
-// errorToAdmissionResponse is a helper function to create an AdmissionResponse
-// with an embedded error.
-func errorToAdmissionResponse(err error) *v1.AdmissionResponse {
+// toAdmissionResponse 是一个辅助函数，用于创建一个带有嵌入式错误的AdmissionResponse。
+func toAdmissionResponse(err error) *v1.AdmissionResponse {
 	return &v1.AdmissionResponse{
 		Result: &metav1.Status{
 			Message: err.Error(),
@@ -92,13 +80,13 @@ func getAppIDFromRequest(req *v1.AdmissionRequest) string {
 	if err := json.Unmarshal(req.Object.Raw, &pod); err != nil {
 		log.Warnf("could not unmarshal raw object: %v", err)
 	} else {
-		appID = sidecar.GetAppID(pod.ObjectMeta)
+		appID = getAppID(pod)
 	}
 
 	return appID
 }
 
-// NewInjector returns a new Injector instance with the given config.
+// NewInjector 返回注入实例
 func NewInjector(authUIDs []string, config Config, daprClient scheme.Interface, kubeClient kubernetes.Interface) Injector {
 	mux := http.NewServeMux()
 
@@ -107,7 +95,6 @@ func NewInjector(authUIDs []string, config Config, daprClient scheme.Interface, 
 		deserializer: serializer.NewCodecFactory(
 			runtime.NewScheme(),
 		).UniversalDeserializer(),
-		//nolint:gosec
 		server: &http.Server{
 			Addr:    fmt.Sprintf(":%d", port),
 			Handler: mux,
@@ -121,48 +108,41 @@ func NewInjector(authUIDs []string, config Config, daprClient scheme.Interface, 
 	return i
 }
 
-// AllowedControllersServiceAccountUID returns an array of UID, list of allowed service account on the webhook handler.
-func AllowedControllersServiceAccountUID(ctx context.Context, cfg Config, kubeClient kubernetes.Interface) ([]string, error) {
-	allowedList := []string{}
-	if cfg.AllowedServiceAccounts != "" {
-		allowedList = append(allowedList, strings.Split(cfg.AllowedServiceAccounts, ",")...)
-	}
-	allowedList = append(allowedList, AllowedServiceAccountInfos...)
-
-	return getServiceAccount(ctx, kubeClient, allowedList)
-}
-
-// getServiceAccount parses "service-account:namespace" k/v list and returns an array of UID.
-func getServiceAccount(ctx context.Context, kubeClient kubernetes.Interface, allowedServiceAccountInfos []string) ([]string, error) {
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, getKubernetesServiceAccountTimeoutSeconds*time.Second)
-	defer cancel()
-
-	serviceaccounts, err := kubeClient.CoreV1().ServiceAccounts("").List(ctxWithTimeout, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-
+// AllowedControllersServiceAccountUID 返回一个UID数组，webhook处理程序上允许的服务帐户列表。
+func AllowedControllersServiceAccountUID(ctx context.Context, kubeClient kubernetes.Interface) ([]string, error) {
 	allowedUids := []string{}
-
-	for _, allowedServiceInfo := range allowedServiceAccountInfos {
-		serviceAccountInfo := strings.Split(allowedServiceInfo, ":")
-		found := false
-		for _, sa := range serviceaccounts.Items {
-			if sa.Name == serviceAccountInfo[0] && sa.Namespace == serviceAccountInfo[1] {
-				allowedUids = append(allowedUids, string(sa.ObjectMeta.UID))
-				found = true
-				break
+	for i, allowedControllersServiceAccount := range allowedControllersServiceAccounts {
+		saUUID, err := getServiceAccount(ctx, kubeClient, allowedControllersServiceAccount)
+		// i == 0 => "replicaset-controller" is the only one mandatory
+		if err != nil {
+			if i == 0 {
+				return nil, err
 			}
+			log.Warnf("Unable to get SA %s UID (%s)", allowedControllersServiceAccount, err)
+			continue
 		}
-		if !found {
-			log.Warnf("Unable to get SA %s UID", allowedServiceInfo)
-		}
+		allowedUids = append(allowedUids, saUUID)
 	}
 
 	return allowedUids, nil
 }
 
-func (i *injector) Run(ctx context.Context, onReady func()) {
+func getServiceAccount(ctx context.Context, kubeClient kubernetes.Interface, allowedControllersServiceAccount string) (string, error) {
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, getKubernetesServiceAccountTimeoutSeconds*time.Second)
+	defer cancel()
+
+	sa, err := kubeClient.CoreV1().ServiceAccounts(metav1.NamespaceSystem).Get(ctxWithTimeout, allowedControllersServiceAccount, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+
+	return string(sa.ObjectMeta.UID), nil
+}
+
+// Run 启动sidecar注入逻辑
+func (i *injector) Run(ctx context.Context) {
+	doneCh := make(chan struct{})
+
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -172,47 +152,34 @@ func (i *injector) Run(ctx context.Context, onReady func()) {
 				time.Second*5,
 			)
 			defer cancel()
-			err := i.server.Shutdown(shutdownCtx)
-			if err != nil {
-				log.Errorf("Error while shutting down injector: %v", err)
-			}
+			i.server.Shutdown(shutdownCtx) // nolint: errcheck
+		case <-doneCh:
 		}
 	}()
 
-	ln, err := net.Listen("tcp", i.server.Addr)
-	if err != nil {
-		log.Fatalf("Eror while creating listener: %v", err)
-	}
-
 	log.Infof("Sidecar injector is listening on %s, patching Dapr-enabled pods", i.server.Addr)
-
-	if onReady != nil {
-		onReady()
-	}
-
-	err = i.server.ServeTLS(ln, i.config.TLSCertFile, i.config.TLSKeyFile)
+	//err := i.server.ListenAndServeTLS(i.config.TLSCertFile, i.config.TLSKeyFile)
+	// ls change to http
+	err := i.server.ListenAndServe()
 	if err != http.ErrServerClosed {
 		log.Errorf("Sidecar injector error: %s", err)
 	}
-
-	ln.Close()
-
-	log.Info("Sidecar injector stopped")
+	close(doneCh)
 }
 
 func (i *injector) handleRequest(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	// sidecar计数+1
 	monitoring.RecordSidecarInjectionRequestsCount()
 
 	var body []byte
-	var err error
 	if r.Body != nil {
-		defer r.Body.Close()
-		body, err = io.ReadAll(r.Body)
-		if err != nil {
-			body = nil
+		if data, err := io.ReadAll(r.Body); err == nil {
+			body = data
 		}
 	}
 	if len(body) == 0 {
+		// 非POST这里不会有数据
 		log.Error("empty body")
 		http.Error(w, "empty body", http.StatusBadRequest)
 		return
@@ -221,12 +188,18 @@ func (i *injector) handleRequest(w http.ResponseWriter, r *http.Request) {
 	contentType := r.Header.Get("Content-Type")
 	if contentType != runtime.ContentTypeJSON {
 		log.Errorf("Content-Type=%s, expect %s", contentType, runtime.ContentTypeJSON)
-		errStr := fmt.Sprintf("invalid Content-Type, expected `%s`", runtime.ContentTypeJSON)
-		http.Error(w, errStr, http.StatusUnsupportedMediaType)
+		http.Error(
+			w,
+			fmt.Sprintf("invalid Content-Type, expect `%s`", runtime.ContentTypeJSON),
+			http.StatusUnsupportedMediaType,
+		)
+
 		return
 	}
 
-	var patchOps []sidecar.PatchOperation
+	var admissionResponse *v1.AdmissionResponse
+	var patchOps []PatchOperation
+	var err error
 	patchedSuccessfully := false
 
 	ar := v1.AdmissionReview{}
@@ -234,26 +207,28 @@ func (i *injector) handleRequest(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Errorf("Can't decode body: %v", err)
 	} else {
-		if !(utils.Contains(i.authUIDs, ar.Request.UserInfo.UID) || utils.Contains(ar.Request.UserInfo.Groups, systemGroup)) {
+		//authUIDs：system名称空间下各副本控制器的UUID
+		if !(utils.StringSliceContains(ar.Request.UserInfo.UID, i.authUIDs) || utils.StringSliceContains(systemGroup, ar.Request.UserInfo.Groups)) {
 			log.Errorf("service account '%s' not on the list of allowed controller accounts", ar.Request.UserInfo.Username)
 		} else if ar.Request.Kind.Kind != "Pod" {
 			log.Errorf("invalid kind for review: %s", ar.Kind)
 		} else {
+			// 获取到处理之后的所有patch
 			patchOps, err = i.getPodPatchOperations(&ar, i.config.Namespace, i.config.SidecarImage, i.config.SidecarImagePullPolicy, i.kubeClient, i.daprClient)
 			if err == nil {
 				patchedSuccessfully = true
 			}
 		}
 	}
-
+	// 诊断APP ID
 	diagAppID := getAppIDFromRequest(ar.Request)
 
-	var admissionResponse *v1.AdmissionResponse
 	if err != nil {
-		admissionResponse = errorToAdmissionResponse(err)
+		admissionResponse = toAdmissionResponse(err)
 		log.Errorf("Sidecar injector failed to inject for app '%s'. Error: %s", diagAppID, err)
 		monitoring.RecordFailedSidecarInjectionCount(diagAppID, "patch")
 	} else if len(patchOps) == 0 {
+		// 不做修改，直接通过
 		admissionResponse = &v1.AdmissionResponse{
 			Allowed: true,
 		}
@@ -261,49 +236,52 @@ func (i *injector) handleRequest(w http.ResponseWriter, r *http.Request) {
 		var patchBytes []byte
 		patchBytes, err = json.Marshal(patchOps)
 		if err != nil {
-			admissionResponse = errorToAdmissionResponse(err)
+			admissionResponse = toAdmissionResponse(err)
 		} else {
 			admissionResponse = &v1.AdmissionResponse{
 				Allowed: true,
 				Patch:   patchBytes,
 				PatchType: func() *v1.PatchType {
+					// 因为不能返回常量的地址
 					pt := v1.PatchTypeJSONPatch
 					return &pt
 				}(),
 			}
 		}
 	}
-
-	admissionReview := v1.AdmissionReview{
-		Response: admissionResponse,
+	//将admissionResponse 封装成admissionReview
+	admissionReview := v1.AdmissionReview{}
+	if admissionResponse != nil {
+		admissionReview.Response = admissionResponse
+		if ar.Request != nil {
+			admissionReview.Response.UID = ar.Request.UID
+			//满足所有嵌入TypeMeta的对象的ObjectKind接口
+			admissionReview.SetGroupVersionKind(*gvk)
+		}
 	}
-	if admissionResponse != nil && ar.Request != nil {
-		admissionReview.Response.UID = ar.Request.UID
-		admissionReview.SetGroupVersionKind(*gvk)
-	}
 
-	// log.Debug("ready to write response ...")
-
+	log.Infof("ready to write response ...")
 	respBytes, err := json.Marshal(admissionReview)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		log.Errorf("Sidecar injector failed to inject for app '%s'. Can't serialize response: %s", diagAppID, err)
+		http.Error(
+			w,
+			err.Error(),
+			http.StatusInternalServerError,
+		)
+
+		log.Errorf("Sidecar injector failed to inject for app '%s'. Can't deserialize response: %s", diagAppID, err)
 		monitoring.RecordFailedSidecarInjectionCount(diagAppID, "response")
-		return
 	}
 	w.Header().Set("Content-Type", runtime.ContentTypeJSON)
-	_, err = w.Write(respBytes)
-	if err != nil {
-		log.Errorf("Sidecar injector failed to inject for app '%s'. Failed to write response: %v", diagAppID, err)
-		monitoring.RecordFailedSidecarInjectionCount(diagAppID, "write_response")
-		return
-	}
-
-	if patchedSuccessfully {
-		log.Infof("Sidecar injector succeeded injection for app '%s'", diagAppID)
-		monitoring.RecordSuccessfulSidecarInjectionCount(diagAppID)
+	if _, err := w.Write(respBytes); err != nil {
+		log.Error(err)
 	} else {
-		log.Errorf("Admission succeeded, but pod was not patched. No sidecar injected for '%s'", diagAppID)
-		monitoring.RecordFailedSidecarInjectionCount(diagAppID, "pod_patch")
+		if patchedSuccessfully {
+			log.Infof("Sidecar injector succeeded injection for app '%s'", diagAppID)
+			monitoring.RecordSuccessfulSidecarInjectionCount(diagAppID)
+		} else {
+			log.Errorf("Admission succeeded, but pod was not patched. No sidecar injected for '%s'", diagAppID)
+			monitoring.RecordFailedSidecarInjectionCount(diagAppID, "pod_patch")
+		}
 	}
 }

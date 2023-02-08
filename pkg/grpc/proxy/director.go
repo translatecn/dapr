@@ -1,11 +1,10 @@
-// Based on https://github.com/trusch/grpc-proxy
-// Copyright Michal Witkowski. Licensed under Apache2 license: https://github.com/trusch/grpc-proxy/blob/master/LICENSE.txt
+// Copyright Michal Witkowski.
+// Code is based on https://github.com/trusch/grpc-proxy
 
 package proxy
 
 import (
-	"context"
-
+	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 )
 
@@ -22,14 +21,4 @@ import (
 // are invoked. So decisions around authorization, monitoring etc. are better to be handled there.
 //
 // See the rather rich example.
-type StreamDirector func(ctx context.Context, fullMethodName string) (context.Context, *grpc.ClientConn, *ProxyTarget, func(destroy bool), error)
-
-// ProxyTarget is an object that describes the network and service identification of a remote Dapr process
-type ProxyTarget struct {
-	ID        string
-	Address   string
-	Namespace string
-}
-
-// DirectorConnectionFactory is a method signature for a gRPC connection establisher method used for client/server streams
-type DirectorConnectionFactory func(ctx context.Context, address string, id string, namespace string, customOpts ...grpc.DialOption) (*grpc.ClientConn, func(destroy bool), error)
+type StreamDirector func(ctx context.Context, fullMethodName string) (context.Context, *grpc.ClientConn, error)

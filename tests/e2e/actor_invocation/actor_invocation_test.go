@@ -1,18 +1,9 @@
-//go:build e2e
 // +build e2e
 
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package actor_invocation_e2e
 
@@ -56,9 +47,6 @@ func healthCheckApp(t *testing.T, externalURL string, numHealthChecks int) {
 }
 
 func TestMain(m *testing.M) {
-	utils.SetupLogs("actor_invocation")
-	utils.InitHTTPClient(true)
-
 	// These apps will be deployed before starting actual test
 	// and will be cleaned up after all tests are finished automatically
 	testApps := []kube.AppDescription{

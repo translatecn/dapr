@@ -1,78 +1,38 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package messaging
 
 import (
 	"context"
-	"net"
-	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
 	"github.com/dapr/dapr/pkg/config"
 	"github.com/dapr/dapr/pkg/diagnostics"
-	invokev1 "github.com/dapr/dapr/pkg/messaging/v1"
-	"github.com/dapr/dapr/pkg/resiliency"
 )
 
-func connectionFn(ctx context.Context, address, id string, namespace string, customOpts ...grpc.DialOption) (*grpc.ClientConn, func(bool), error) {
-	conn, err := grpc.Dial(id,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithContextDialer(func(ctx context.Context, s string) (net.Conn, error) {
-			// Don't actually connect to anything
-			return &net.TCPConn{}, nil
-		}),
-	)
-	if err != nil {
-		return nil, func(bool) {}, err
-	}
-	teardown := func(bool) { conn.Close() }
-	return conn, teardown, err
-}
-
-func appClientFn() (grpc.ClientConnInterface, error) {
-	appClient, _, err := connectionFn(context.Background(), "a:123", "a", "")
-	return appClient, err
+func connectionFn(ctx context.Context, address, id string, namespace string, skipTLS, recreateIfExists, enableSSL bool, customOpts ...grpc.DialOption) (*grpc.ClientConn, error) {
+	return grpc.Dial(id, grpc.WithInsecure())
 }
 
 func TestNewProxy(t *testing.T) {
-	p := NewProxy(ProxyOpts{
-		ConnectionFactory: connectionFn,
-		AppClientFn:       appClientFn,
-		AppID:             "a",
-		ACL:               nil,
-		Resiliency:        resiliency.New(nil),
-	})
+	p := NewProxy(connectionFn, "a", "a:123", 50005, nil)
 	proxy := p.(*proxy)
 
 	assert.Equal(t, "a", proxy.appID)
+	assert.Equal(t, "a:123", proxy.localAppAddress)
+	assert.Equal(t, 50005, proxy.remotePort)
 	assert.NotNil(t, proxy.connectionFactory)
-	assert.True(t, reflect.ValueOf(connectionFn).Pointer() == reflect.ValueOf(proxy.connectionFactory).Pointer())
 }
 
 func TestSetRemoteAppFn(t *testing.T) {
-	p := NewProxy(ProxyOpts{
-		ConnectionFactory: connectionFn,
-		AppClientFn:       appClientFn,
-		AppID:             "a",
-		ACL:               nil,
-		Resiliency:        resiliency.New(nil),
-	})
+	p := NewProxy(connectionFn, "a", "a:123", 50005, nil)
 	p.SetRemoteAppFn(func(s string) (remoteApp, error) {
 		return remoteApp{
 			id: "a",
@@ -87,13 +47,7 @@ func TestSetRemoteAppFn(t *testing.T) {
 }
 
 func TestSetTelemetryFn(t *testing.T) {
-	p := NewProxy(ProxyOpts{
-		ConnectionFactory: connectionFn,
-		AppClientFn:       appClientFn,
-		AppID:             "a",
-		ACL:               nil,
-		Resiliency:        resiliency.New(nil),
-	})
+	p := NewProxy(connectionFn, "a", "a:123", 50005, nil)
 	p.SetTelemetryFn(func(ctx context.Context) context.Context {
 		return ctx
 	})
@@ -107,12 +61,7 @@ func TestSetTelemetryFn(t *testing.T) {
 }
 
 func TestHandler(t *testing.T) {
-	p := NewProxy(ProxyOpts{
-		ConnectionFactory: connectionFn,
-		AppClientFn:       appClientFn,
-		AppID:             "a",
-		Resiliency:        resiliency.New(nil),
-	})
+	p := NewProxy(connectionFn, "a", "a:123", 50005, nil)
 	h := p.Handler()
 
 	assert.NotNil(t, h)
@@ -120,12 +69,7 @@ func TestHandler(t *testing.T) {
 
 func TestIntercept(t *testing.T) {
 	t.Run("no app-id in metadata", func(t *testing.T) {
-		p := NewProxy(ProxyOpts{
-			ConnectionFactory: connectionFn,
-			AppClientFn:       appClientFn,
-			AppID:             "a",
-			Resiliency:        resiliency.New(nil),
-		})
+		p := NewProxy(connectionFn, "a", "a:123", 50005, nil)
 		p.SetTelemetryFn(func(ctx context.Context) context.Context {
 			return ctx
 		})
@@ -138,20 +82,14 @@ func TestIntercept(t *testing.T) {
 
 		ctx := metadata.NewOutgoingContext(context.TODO(), metadata.MD{"a": []string{"b"}})
 		proxy := p.(*proxy)
-		_, conn, _, teardown, err := proxy.intercept(ctx, "/test")
-		defer teardown(true)
+		_, conn, err := proxy.intercept(ctx, "/test")
 
 		assert.Error(t, err)
 		assert.Nil(t, conn)
 	})
 
 	t.Run("app-id exists in metadata", func(t *testing.T) {
-		p := NewProxy(ProxyOpts{
-			ConnectionFactory: connectionFn,
-			AppClientFn:       appClientFn,
-			AppID:             "a",
-			Resiliency:        resiliency.New(nil),
-		})
+		p := NewProxy(connectionFn, "a", "a:123", 50005, nil)
 		p.SetTelemetryFn(func(ctx context.Context) context.Context {
 			return ctx
 		})
@@ -164,18 +102,13 @@ func TestIntercept(t *testing.T) {
 
 		ctx := metadata.NewIncomingContext(context.TODO(), metadata.MD{diagnostics.GRPCProxyAppIDKey: []string{"b"}})
 		proxy := p.(*proxy)
-		_, _, _, _, err := proxy.intercept(ctx, "/test")
+		_, _, err := proxy.intercept(ctx, "/test")
 
 		assert.NoError(t, err)
 	})
 
 	t.Run("proxy to the app", func(t *testing.T) {
-		p := NewProxy(ProxyOpts{
-			ConnectionFactory: connectionFn,
-			AppClientFn:       appClientFn,
-			AppID:             "a",
-			Resiliency:        resiliency.New(nil),
-		})
+		p := NewProxy(connectionFn, "a", "a:123", 50005, nil)
 		p.SetTelemetryFn(func(ctx context.Context) context.Context {
 			return ctx
 		})
@@ -188,8 +121,7 @@ func TestIntercept(t *testing.T) {
 
 		ctx := metadata.NewIncomingContext(context.TODO(), metadata.MD{diagnostics.GRPCProxyAppIDKey: []string{"a"}})
 		proxy := p.(*proxy)
-		_, conn, _, teardown, err := proxy.intercept(ctx, "/test")
-		defer teardown(true)
+		_, conn, err := proxy.intercept(ctx, "/test")
 
 		assert.NoError(t, err)
 		assert.NotNil(t, conn)
@@ -197,12 +129,7 @@ func TestIntercept(t *testing.T) {
 	})
 
 	t.Run("proxy to a remote app", func(t *testing.T) {
-		p := NewProxy(ProxyOpts{
-			ConnectionFactory: connectionFn,
-			AppClientFn:       appClientFn,
-			AppID:             "a",
-			Resiliency:        resiliency.New(nil),
-		})
+		p := NewProxy(connectionFn, "a", "a:123", 50005, nil)
 		p.SetTelemetryFn(func(ctx context.Context) context.Context {
 			ctx = metadata.AppendToOutgoingContext(ctx, "a", "b")
 			return ctx
@@ -216,8 +143,7 @@ func TestIntercept(t *testing.T) {
 
 		ctx := metadata.NewIncomingContext(context.TODO(), metadata.MD{diagnostics.GRPCProxyAppIDKey: []string{"b"}})
 		proxy := p.(*proxy)
-		ctx, conn, _, teardown, err := proxy.intercept(ctx, "/test")
-		defer teardown(true)
+		ctx, conn, err := proxy.intercept(ctx, "/test")
 
 		assert.NoError(t, err)
 		assert.NotNil(t, conn)
@@ -225,8 +151,6 @@ func TestIntercept(t *testing.T) {
 
 		md, _ := metadata.FromOutgoingContext(ctx)
 		assert.Equal(t, "b", md["a"][0])
-		assert.Equal(t, "a", md[invokev1.CallerIDHeader][0])
-		assert.Equal(t, "b", md[invokev1.CalleeIDHeader][0])
 	})
 
 	t.Run("access policies applied", func(t *testing.T) {
@@ -235,19 +159,7 @@ func TestIntercept(t *testing.T) {
 			TrustDomain:   "public",
 		}
 
-		p := NewProxy(ProxyOpts{
-			ConnectionFactory: connectionFn,
-			AppClientFn:       appClientFn,
-			AppID:             "a",
-			ACL:               acl,
-			Resiliency:        resiliency.New(nil),
-		})
-		p.SetRemoteAppFn(func(s string) (remoteApp, error) {
-			return remoteApp{
-				id:      "a",
-				address: "a:123",
-			}, nil
-		})
+		p := NewProxy(connectionFn, "a", "a:123", 50005, acl)
 		p.SetTelemetryFn(func(ctx context.Context) context.Context {
 			ctx = metadata.AppendToOutgoingContext(ctx, "a", "b")
 			return ctx
@@ -256,28 +168,7 @@ func TestIntercept(t *testing.T) {
 		ctx := metadata.NewIncomingContext(context.TODO(), metadata.MD{diagnostics.GRPCProxyAppIDKey: []string{"a"}})
 		proxy := p.(*proxy)
 
-		_, conn, _, teardown, err := proxy.intercept(ctx, "/test")
-		defer teardown(true)
-
-		assert.Error(t, err)
-		assert.Nil(t, conn)
-	})
-
-	t.Run("SetRemoteAppFn never called", func(t *testing.T) {
-		p := NewProxy(ProxyOpts{
-			ConnectionFactory: connectionFn,
-			AppClientFn:       appClientFn,
-			AppID:             "a",
-			Resiliency:        resiliency.New(nil),
-		})
-		p.SetTelemetryFn(func(ctx context.Context) context.Context {
-			return ctx
-		})
-
-		ctx := metadata.NewIncomingContext(context.TODO(), metadata.MD{diagnostics.GRPCProxyAppIDKey: []string{"a"}})
-		proxy := p.(*proxy)
-		_, conn, _, teardown, err := proxy.intercept(ctx, "/test")
-		defer teardown(true)
+		_, conn, err := proxy.intercept(ctx, "/test")
 
 		assert.Error(t, err)
 		assert.Nil(t, conn)

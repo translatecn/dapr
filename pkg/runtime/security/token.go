@@ -1,38 +1,32 @@
-/*
-Copyright 2022 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package security
 
 import (
 	"os"
 	"strings"
+)
 
-	"github.com/dapr/dapr/pkg/runtime/security/consts"
+/* #nosec. */
+const (
+	// APITokenEnvVar api token多对应的环境变量
+	APITokenEnvVar    = "DAPR_API_TOKEN"
+	AppAPITokenEnvVar = "APP_API_TOKEN"
+	// APITokenHeader http\grpc 调用所携带的header
+	APITokenHeader = "dapr-api-token"
 )
 
 var excludedRoutes = []string{"/healthz"}
 
-// GetAPIToken returns the value of the api token from an environment variable.
+// GetAPIToken 返回从环境变量中读取的 api token
 func GetAPIToken() string {
-	return os.Getenv(consts.APITokenEnvVar)
+	return os.Getenv(APITokenEnvVar)
 }
 
-// GetAppToken returns the value of the app api token from an environment variable.
+// GetAppToken 返回环境变量中的app api token的值。
 func GetAppToken() string {
-	return os.Getenv(consts.AppAPITokenEnvVar)
+	return os.Getenv(AppAPITokenEnvVar)
 }
 
-// ExcludedRoute returns whether a given route should be excluded from a token check.
+// ExcludedRoute 返回一个给定的路由是否应该被排除在标记检查之外。
 func ExcludedRoute(route string) bool {
 	for _, r := range excludedRoutes {
 		if strings.Contains(route, r) {

@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package v1alpha1
 
@@ -18,69 +10,57 @@ import (
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	"github.com/dapr/dapr/utils"
 )
 
-//+genclient
-//+genclient:noStatus
-//+kubebuilder:object:root=true
+// +genclient
+// +genclient:noStatus
+// +kubebuilder:object:root=true
 
-// Component describes an Dapr component type.
+// Component dapr组件的描述
 type Component struct {
-	metav1.TypeMeta `json:",inline"`
-	//+optional
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-	//+optional
+	metav1.TypeMeta `json:",inline"` // 这两个字段是k8s资源自己定义的
+	// +optional
+	metav1.ObjectMeta `json:"metadata,omitempty"`// 这两个字段是k8s资源自己定义的
+	// +optional
 	Spec ComponentSpec `json:"spec,omitempty"`
-	//+optional
+	// +optional
 	Auth `json:"auth,omitempty"`
-	//+optional
+	// +optional
 	Scopes []string `json:"scopes,omitempty"`
 }
 
-// Kind returns the component kind.
-func (Component) Kind() string {
-	return "Component"
-}
-
-// LogName returns the name of the component that can be used in logging.
-func (c Component) LogName() string {
-	return utils.ComponentLogName(c.ObjectMeta.Name, c.Spec.Type, c.Spec.Version)
-}
-
-// ComponentSpec is the spec for a component.
+// ComponentSpec 组件的定义
 type ComponentSpec struct {
-	Type    string `json:"type"`
-	Version string `json:"version"`
-	//+optional
+	Type    string `json:"type"` // 组件类型，   :   大类型.组件实现
+	Version string `json:"version"` // 版本
+	// +optional
 	IgnoreErrors bool           `json:"ignoreErrors"`
-	Metadata     []MetadataItem `json:"metadata"`
-	//+optional
+	Metadata     []MetadataItem `json:"metadata"` // 用户自己设置的键值对,可以引用k8s里secret的值
+	// +optional
 	InitTimeout string `json:"initTimeout"`
 }
 
-// MetadataItem is a name/value pair for a metadata.
+// MetadataItem 是一个元数据的名/值对。
 type MetadataItem struct {
 	Name string `json:"name"`
-	//+optional
+	// +optional
 	Value DynamicValue `json:"value,omitempty"`
-	//+optional
-	SecretKeyRef SecretKeyRef `json:"secretKeyRef,omitempty"`
+	// +optional
+	SecretKeyRef SecretKeyRef `json:"secretKeyRef,omitempty"`  // k8s中的引用对象
 }
 
-// SecretKeyRef is a reference to a secret holding the value for the metadata item. Name is the secret name, and key is the field in the secret.
+// SecretKeyRef 是对持有元数据项值的秘密的引用。Name是秘密的名称，key是秘密中的字段。
 type SecretKeyRef struct {
 	Name string `json:"name"`
 	Key  string `json:"key"`
 }
 
-// Auth represents authentication details for the component.
+// Auth 代表该组件的认证细节。
 type Auth struct {
 	SecretStore string `json:"secretStore"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // ComponentList is a list of Dapr components.
 type ComponentList struct {

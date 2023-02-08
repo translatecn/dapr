@@ -1,0 +1,47 @@
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: foo
+spec:
+  template:
+    metadata:
+      annotations:
+        dapr.io/enabled: 'true'
+        dapr.io/app-id: foo
+        dapr.io/app-port: '8000'
+      labels:
+        app: foo
+    spec:
+      dnsPolicy: "Default"
+      containers:
+        - name: foo
+          image: acejilam/example:latest
+          args:
+            - "/app/foo.py"
+  selector:
+    matchLabels:
+      app: foo
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: bar
+spec:
+  template:
+    metadata:
+      annotations:
+        dapr.io/enabled: 'true'
+        dapr.io/app-id: bar
+        dapr.io/app-port: '8000'
+      labels:
+        app: bar
+    spec:
+      containers:
+        - name: bar
+          image: acejilam/example:latest
+          args:
+            - "/app/bar.py"
+  selector:
+    matchLabels:
+      app: bar

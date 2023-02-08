@@ -12,35 +12,38 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/pkg/errors"
+
 	"github.com/dapr/dapr/pkg/sentry/certs"
 	"github.com/dapr/dapr/pkg/sentry/identity"
 )
 
 const (
-	blockTypeECPrivateKey = "EC PRIVATE KEY" // EC private key
-	blockTypePrivateKey   = "PRIVATE KEY"    // PKCS#8 private key
+	blockTypeECPrivateKey = "EC PRIVATE KEY" // EC 类型秘钥
+	blockTypePrivateKey   = "PRIVATE KEY"    // PKCS# 8个普通私钥
 	encodeMsgCSR          = "CERTIFICATE REQUEST"
 	encodeMsgCert         = "CERTIFICATE"
 )
 
-// The OID for the SAN extension (http://www.alvestrand.no/objectid/2.5.29.17.html)
+// SAN扩展的OID (http://www.alvestrand.no/objectid/2.5.29.17.html)
 var oidSubjectAlternativeName = asn1.ObjectIdentifier{2, 5, 29, 17}
 
-// GenerateCSR creates a X.509 certificate sign request and private key.
+// GenerateCSR 创建一个X.509证书签名请求和私钥。"", false
 func GenerateCSR(org string, pkcs8 bool) ([]byte, []byte, error) {
 	key, err := certs.GenerateECPrivateKey()
 	if err != nil {
-		return nil, nil, fmt.Errorf("unable to generate private keys: %w", err)
+		return nil, nil, errors.Wrap(err, "unable to generate private keys")
 	}
 
-	templ, err := genCSRTemplate(org)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error generating csr template: %w", err)
+	templ := &x509.CertificateRequest{
+		Subject: pkix.Name{
+			Organization: []string{org},
+		},
 	}
 
-	csrBytes, err := x509.CreateCertificateRequest(rand.Reader, templ, key)
+	csrBytes, err := x509.CreateCertificateRequest(rand.Reader, templ, crypto.PrivateKey(key))
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create CSR: %w", err)
+		return nil, nil, errors.Wrap(err, "failed to create CSR")
 	}
 
 	crtPem, keyPem, err := encode(true, csrBytes, key, pkcs8)
@@ -55,8 +58,7 @@ func genCSRTemplate(org string) (*x509.CertificateRequest, error) {
 	}, nil
 }
 
-// generateBaseCert returns a base non-CA cert that can be made a workload or CA cert
-// By adding subjects, key usage and additional proerties.
+// generateBaseCert  返回一个基本的非CA证书，该证书可以成为一个工作负载或CA证书。通过添加主体、密钥使用和附加属性。
 func generateBaseCert(ttl, skew time.Duration, publicKey interface{}) (*x509.Certificate, error) {
 	serNum, err := newSerialNumber()
 	if err != nil {
@@ -64,7 +66,7 @@ func generateBaseCert(ttl, skew time.Duration, publicKey interface{}) (*x509.Cer
 	}
 
 	now := time.Now().UTC()
-	// Allow for clock skew with the NotBefore validity bound.
+	// 证书的有效时间
 	notBefore := now.Add(-1 * skew)
 	notAfter := now.Add(ttl)
 
@@ -76,6 +78,7 @@ func generateBaseCert(ttl, skew time.Duration, publicKey interface{}) (*x509.Cer
 	}, nil
 }
 
+// GenerateIssuerCertCSR 生成颁发者证书、ca证书
 func GenerateIssuerCertCSR(cn string, publicKey interface{}, ttl, skew time.Duration) (*x509.Certificate, error) {
 	cert, err := generateBaseCert(ttl, skew, publicKey)
 	if err != nil {
@@ -93,7 +96,7 @@ func GenerateIssuerCertCSR(cn string, publicKey interface{}, ttl, skew time.Dura
 	return cert, nil
 }
 
-// GenerateRootCertCSR returns a CA root cert x509 Certificate.
+// GenerateRootCertCSR 返回一个CA根证书 x509证书。
 func GenerateRootCertCSR(org, cn string, publicKey interface{}, ttl, skew time.Duration) (*x509.Certificate, error) {
 	cert, err := generateBaseCert(ttl, skew, publicKey)
 	if err != nil {
@@ -113,13 +116,12 @@ func GenerateRootCertCSR(org, cn string, publicKey interface{}, ttl, skew time.D
 	return cert, nil
 }
 
-// GenerateCSRCertificate returns an x509 Certificate from a CSR, signing cert, public key, signing private key and duration.
+// GenerateCSRCertificate 返回来自CSR、签名证书、公钥、签名私钥和有期限的x509证书。
 func GenerateCSRCertificate(csr *x509.CertificateRequest, subject string, identityBundle *identity.Bundle, signingCert *x509.Certificate, publicKey interface{}, signingKey crypto.PrivateKey,
-	ttl, skew time.Duration, isCA bool,
-) ([]byte, error) {
+	ttl, skew time.Duration, isCA bool) ([]byte, error) {
 	cert, err := generateBaseCert(ttl, skew, publicKey)
 	if err != nil {
-		return nil, fmt.Errorf("error generating csr certificate: %w", err)
+		return nil, errors.Wrap(err, "error generating csr certificate")
 	}
 	if isCA {
 		cert.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign
@@ -145,7 +147,7 @@ func GenerateCSRCertificate(csr *x509.CertificateRequest, subject string, identi
 	if identityBundle != nil {
 		spiffeID, err := identity.CreateSPIFFEID(identityBundle.TrustDomain, identityBundle.Namespace, identityBundle.ID)
 		if err != nil {
-			return nil, fmt.Errorf("error generating spiffe id: %w", err)
+			return nil, errors.Wrap(err, "error generating spiffe id")
 		}
 
 		rv := []asn1.RawValue{
@@ -163,7 +165,7 @@ func GenerateCSRCertificate(csr *x509.CertificateRequest, subject string, identi
 
 		b, err := asn1.Marshal(rv)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal asn1 raw value for spiffe id: %w", err)
+			return nil, errors.Wrap(err, "failed to marshal asn1 raw value for spiffe id")
 		}
 
 		cert.ExtraExtensions = append(cert.ExtraExtensions, pkix.Extension{
@@ -176,6 +178,7 @@ func GenerateCSRCertificate(csr *x509.CertificateRequest, subject string, identi
 	return x509.CreateCertificate(rand.Reader, cert, signingCert, publicKey, signingKey)
 }
 
+//	crtPem, keyPem, err := encode(true, csrBytes, key, false)
 func encode(csr bool, csrOrCert []byte, privKey *ecdsa.PrivateKey, pkcs8 bool) ([]byte, []byte, error) {
 	encodeMsg := encodeMsgCert
 	if csr {
@@ -201,11 +204,12 @@ func encode(csr bool, csrOrCert []byte, privKey *ecdsa.PrivateKey, pkcs8 bool) (
 	return csrOrCertPem, privPem, nil
 }
 
+// 生成证书编号
 func newSerialNumber() (*big.Int, error) {
 	serialNumLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 	serialNum, err := rand.Int(rand.Reader, serialNumLimit)
 	if err != nil {
-		return nil, fmt.Errorf("error generating serial number: %w", err)
+		return nil, errors.Wrap(err, "error generating serial number")
 	}
 	return serialNum, nil
 }

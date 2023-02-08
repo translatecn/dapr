@@ -4,23 +4,23 @@ import (
 	"os"
 )
 
-var (
-	// RootCertFilename is the filename that holds the root certificate.
+const (
+	// RootCertFilename 根证书的名字
 	RootCertFilename = "ca.crt"
-	// IssuerCertFilename is the filename that holds the issuer certificate.
+	// IssuerCertFilename 持有颁发者证书的文件名。
 	IssuerCertFilename = "issuer.crt"
-	// IssuerKeyFilename is the filename that holds the issuer key.
+	// IssuerKeyFilename 保存颁发者密钥的文件名。
 	IssuerKeyFilename = "issuer.key"
 )
 
-// CertChain holds the certificate trust chain PEM values.
+// CertChain 保存证书信任链PEM值。 Openssl使用PEM(RFC 1421－1424)文档格式
 type CertChain struct {
 	RootCA []byte
 	Cert   []byte
 	Key    []byte
 }
 
-// LoadFromDisk retruns a CertChain from a given directory.
+// LoadFromDisk 从给定目录返回CertChain。
 func LoadFromDisk(rootCertPath, issuerCertPath, issuerKeyPath string) (*CertChain, error) {
 	rootCert, err := os.ReadFile(rootCertPath)
 	if err != nil {

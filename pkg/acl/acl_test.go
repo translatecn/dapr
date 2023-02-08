@@ -1,17 +1,8 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
-//nolint:nosnakecase
 package acl
 
 import (
@@ -27,7 +18,6 @@ const (
 	app1    = "app1"
 	app2    = "app2"
 	app3    = "app3"
-	app4    = "app4"
 	app1Ns1 = "app1||ns1"
 	app2Ns2 = "app2||ns2"
 	app3Ns1 = "app3||ns1"
@@ -88,34 +78,6 @@ func initializeAccessControlList(protocol string) (*config.AccessControlList, er
 				},
 			},
 			{
-				AppName:       app4,
-				DefaultAction: config.DenyAccess,
-				TrustDomain:   "domain1",
-				Namespace:     "ns2",
-				AppOperationActions: []config.AppOperation{
-					{
-						Action:    config.AllowAccess,
-						Operation: "/op6",
-					},
-					{
-						Action:    config.AllowAccess,
-						Operation: "/op7/a/b/*",
-					},
-					{
-						Action:    config.AllowAccess,
-						Operation: "/op7/a/b/c/f",
-					},
-					{
-						Action:    config.AllowAccess,
-						Operation: "/op7/a/b*",
-					},
-					{
-						Action:    config.AllowAccess,
-						Operation: "/op7/c/**",
-					},
-				},
-			},
-			{
 				AppName:       app1, // Duplicate app id with a different namespace
 				DefaultAction: config.AllowAccess,
 				TrustDomain:   "public",
@@ -151,26 +113,24 @@ func TestParseAccessControlSpec(t *testing.T) {
 		assert.Equal(t, "ns1", accessControlList.PolicySpec[app1Ns1].Namespace)
 
 		op1Actions := config.AccessControlListOperationAction{
-			OperationName: "/op1",
-			VerbAction:    make(map[string]string),
+			OperationPostFix: "/",
+			VerbAction:       make(map[string]string),
 		}
 		op1Actions.VerbAction["POST"] = config.AllowAccess
 		op1Actions.VerbAction["GET"] = config.AllowAccess
 		op1Actions.OperationAction = config.AllowAccess
 
 		op2Actions := config.AccessControlListOperationAction{
-			OperationName: "/op2",
-			VerbAction:    make(map[string]string),
+			OperationPostFix: "/",
+			VerbAction:       make(map[string]string),
 		}
 		op2Actions.VerbAction["*"] = config.DenyAccess
 		op2Actions.OperationAction = config.DenyAccess
 
-		assert.Equal(t, op1Actions.VerbAction, accessControlList.PolicySpec[app1Ns1].AppOperationActions.Search("/op1").VerbAction)
-		assert.Equal(t, op1Actions.OperationAction, accessControlList.PolicySpec[app1Ns1].AppOperationActions.Search("/op1").OperationAction)
-		assert.Equal(t, op1Actions.OperationName, accessControlList.PolicySpec[app1Ns1].AppOperationActions.Search("/op1").OperationName)
-		assert.Equal(t, op2Actions.VerbAction, accessControlList.PolicySpec[app1Ns1].AppOperationActions.Search("/op2").VerbAction)
-		assert.Equal(t, op2Actions.OperationAction, accessControlList.PolicySpec[app1Ns1].AppOperationActions.Search("/op2").OperationAction)
-		assert.Equal(t, op2Actions.OperationName, accessControlList.PolicySpec[app1Ns1].AppOperationActions.Search("/op2").OperationName)
+		assert.Equal(t, 2, len(accessControlList.PolicySpec[app1Ns1].AppOperationActions["/op1"].VerbAction))
+		assert.Equal(t, op1Actions, accessControlList.PolicySpec[app1Ns1].AppOperationActions["/op1"])
+		assert.Equal(t, 1, len(accessControlList.PolicySpec[app1Ns1].AppOperationActions["/op2"].VerbAction))
+		assert.Equal(t, op2Actions, accessControlList.PolicySpec[app1Ns1].AppOperationActions["/op2"])
 
 		// App2
 		assert.Equal(t, app2, accessControlList.PolicySpec[app2Ns2].AppName)
@@ -179,27 +139,24 @@ func TestParseAccessControlSpec(t *testing.T) {
 		assert.Equal(t, "ns2", accessControlList.PolicySpec[app2Ns2].Namespace)
 
 		op3Actions := config.AccessControlListOperationAction{
-			OperationName: "/op3/a/*",
-			VerbAction:    make(map[string]string),
+			OperationPostFix: "/a/*",
+			VerbAction:       make(map[string]string),
 		}
 		op3Actions.VerbAction["PUT"] = config.AllowAccess
 		op3Actions.VerbAction["GET"] = config.AllowAccess
 		op3Actions.OperationAction = config.AllowAccess
 
 		op4Actions := config.AccessControlListOperationAction{
-			OperationName: "/op4",
-			VerbAction:    make(map[string]string),
+			OperationPostFix: "/",
+			VerbAction:       make(map[string]string),
 		}
 		op4Actions.VerbAction["POST"] = config.AllowAccess
 		op4Actions.OperationAction = config.AllowAccess
 
-		assert.Equal(t, op3Actions.VerbAction, accessControlList.PolicySpec[app2Ns2].AppOperationActions.Search("/op3/a/*").VerbAction)
-		assert.Equal(t, op3Actions.OperationName, accessControlList.PolicySpec[app2Ns2].AppOperationActions.Search("/op3/a/*").OperationName)
-		assert.Equal(t, op3Actions.OperationAction, accessControlList.PolicySpec[app2Ns2].AppOperationActions.Search("/op3/a/*").OperationAction)
-
-		assert.Equal(t, op4Actions.VerbAction, accessControlList.PolicySpec[app2Ns2].AppOperationActions.Search("/op4").VerbAction)
-		assert.Equal(t, op4Actions.OperationName, accessControlList.PolicySpec[app2Ns2].AppOperationActions.Search("/op4").OperationName)
-		assert.Equal(t, op4Actions.OperationAction, accessControlList.PolicySpec[app2Ns2].AppOperationActions.Search("/op4").OperationAction)
+		assert.Equal(t, 2, len(accessControlList.PolicySpec[app2Ns2].AppOperationActions["/op3"].VerbAction))
+		assert.Equal(t, op3Actions, accessControlList.PolicySpec[app2Ns2].AppOperationActions["/op3"])
+		assert.Equal(t, 1, len(accessControlList.PolicySpec[app2Ns2].AppOperationActions["/op4"].VerbAction))
+		assert.Equal(t, op4Actions, accessControlList.PolicySpec[app2Ns2].AppOperationActions["/op4"])
 
 		// App3
 		assert.Equal(t, app3, accessControlList.PolicySpec[app3Ns1].AppName)
@@ -208,15 +165,14 @@ func TestParseAccessControlSpec(t *testing.T) {
 		assert.Equal(t, "ns1", accessControlList.PolicySpec[app3Ns1].Namespace)
 
 		op5Actions := config.AccessControlListOperationAction{
-			OperationName: "/op5",
-			VerbAction:    make(map[string]string),
+			OperationPostFix: "/",
+			VerbAction:       make(map[string]string),
 		}
 		op5Actions.VerbAction["POST"] = config.AllowAccess
 		op5Actions.OperationAction = config.AllowAccess
 
-		assert.Equal(t, op5Actions.VerbAction, accessControlList.PolicySpec[app3Ns1].AppOperationActions.Search("/op5").VerbAction)
-		assert.Equal(t, op5Actions.OperationName, accessControlList.PolicySpec[app3Ns1].AppOperationActions.Search("/op5").OperationName)
-		assert.Equal(t, op5Actions.OperationAction, accessControlList.PolicySpec[app3Ns1].AppOperationActions.Search("/op5").OperationAction)
+		assert.Equal(t, 1, len(accessControlList.PolicySpec[app3Ns1].AppOperationActions["/op5"].VerbAction))
+		assert.Equal(t, op5Actions, accessControlList.PolicySpec[app3Ns1].AppOperationActions["/op5"])
 
 		// App1 with a different namespace
 		assert.Equal(t, app1, accessControlList.PolicySpec[app1Ns4].AppName)
@@ -225,15 +181,14 @@ func TestParseAccessControlSpec(t *testing.T) {
 		assert.Equal(t, "ns4", accessControlList.PolicySpec[app1Ns4].Namespace)
 
 		op6Actions := config.AccessControlListOperationAction{
-			OperationName: "/op6",
-			VerbAction:    make(map[string]string),
+			OperationPostFix: "/",
+			VerbAction:       make(map[string]string),
 		}
 		op6Actions.VerbAction["*"] = config.AllowAccess
 		op6Actions.OperationAction = config.AllowAccess
 
-		assert.Equal(t, op6Actions.VerbAction, accessControlList.PolicySpec[app1Ns4].AppOperationActions.Search("/op6").VerbAction)
-		assert.Equal(t, op6Actions.OperationName, accessControlList.PolicySpec[app1Ns4].AppOperationActions.Search("/op6").OperationName)
-		assert.Equal(t, op6Actions.OperationAction, accessControlList.PolicySpec[app1Ns4].AppOperationActions.Search("/op6").OperationAction)
+		assert.Equal(t, 1, len(accessControlList.PolicySpec[app1Ns4].AppOperationActions["/op6"].VerbAction))
+		assert.Equal(t, op6Actions, accessControlList.PolicySpec[app1Ns4].AppOperationActions["/op6"])
 	})
 
 	t.Run("test when no trust domain and namespace specified in app policy", func(t *testing.T) {
@@ -635,60 +590,35 @@ func TestIsOperationAllowedByAccessControlPolicy(t *testing.T) {
 		// Action = Default action for the app
 		assert.True(t, isAllowed)
 	})
+}
 
-	t.Run("when testing grpc calls, acl is not configured with http verb", func(t *testing.T) {
-		srcAppID := app4
-		accessControlList, _ := initializeAccessControlList(config.GRPCProtocol)
-		spiffeID := config.SpiffeID{
-			TrustDomain: "domain1",
-			Namespace:   "ns2",
-			AppID:       srcAppID,
-		}
-		isAllowed, _ := IsOperationAllowedByAccessControlPolicy(&spiffeID, srcAppID, "op6", common.HTTPExtension_NONE, config.GRPCProtocol, accessControlList)
-		// Action = Default action for the app
-		assert.True(t, isAllowed)
+func TestGetOperationPrefixAndPostfix(t *testing.T) {
+	t.Run("test when operation single post fix exists", func(t *testing.T) {
+		operation := "/invoke/*"
+		prefix, postfix := getOperationPrefixAndPostfix(operation)
+		assert.Equal(t, "/invoke", prefix)
+		assert.Equal(t, "/*", postfix)
 	})
 
-	t.Run("when testing grpc calls, acl configured with wildcard * for full matching", func(t *testing.T) {
-		srcAppID := app4
-		accessControlList, _ := initializeAccessControlList(config.GRPCProtocol)
-		spiffeID := config.SpiffeID{
-			TrustDomain: "domain1",
-			Namespace:   "ns2",
-			AppID:       srcAppID,
-		}
-		isAllowed, _ := IsOperationAllowedByAccessControlPolicy(&spiffeID, srcAppID, "op7/a/b/c", common.HTTPExtension_NONE, config.GRPCProtocol, accessControlList)
-		assert.True(t, isAllowed)
-
-		isAllowed, _ = IsOperationAllowedByAccessControlPolicy(&spiffeID, srcAppID, "op7/a/b/c/d", common.HTTPExtension_NONE, config.GRPCProtocol, accessControlList)
-		assert.False(t, isAllowed)
-
-		isAllowed, _ = IsOperationAllowedByAccessControlPolicy(&spiffeID, srcAppID, "op7/a/b/c/f", common.HTTPExtension_NONE, config.GRPCProtocol, accessControlList)
-		assert.True(t, isAllowed)
+	t.Run("test when operation longer post fix exists", func(t *testing.T) {
+		operation := "/invoke/a/*"
+		prefix, postfix := getOperationPrefixAndPostfix(operation)
+		assert.Equal(t, "/invoke", prefix)
+		assert.Equal(t, "/a/*", postfix)
 	})
 
-	t.Run("when testing grpc calls, acl is configured with wildcards", func(t *testing.T) {
-		srcAppID := app4
-		accessControlList, _ := initializeAccessControlList(config.GRPCProtocol)
-		spiffeID := config.SpiffeID{
-			TrustDomain: "domain1",
-			Namespace:   "ns2",
-			AppID:       srcAppID,
-		}
-		isAllowed, _ := IsOperationAllowedByAccessControlPolicy(&spiffeID, srcAppID, "op7/a/bc", common.HTTPExtension_NONE, config.GRPCProtocol, accessControlList)
-		assert.True(t, isAllowed)
+	t.Run("test when operation no post fix exists", func(t *testing.T) {
+		operation := "/invoke"
+		prefix, postfix := getOperationPrefixAndPostfix(operation)
+		assert.Equal(t, "/invoke", prefix)
+		assert.Equal(t, "/", postfix)
 	})
 
-	t.Run("when testing grpc calls, acl configured with wildcard ** for full matching", func(t *testing.T) {
-		srcAppID := app4
-		accessControlList, _ := initializeAccessControlList(config.GRPCProtocol)
-		spiffeID := config.SpiffeID{
-			TrustDomain: "domain1",
-			Namespace:   "ns2",
-			AppID:       srcAppID,
-		}
-		isAllowed, _ := IsOperationAllowedByAccessControlPolicy(&spiffeID, srcAppID, "op7/c/d/e", common.HTTPExtension_NONE, config.GRPCProtocol, accessControlList)
-		assert.True(t, isAllowed)
+	t.Run("test operation multi path post fix exists", func(t *testing.T) {
+		operation := "/invoke/a/b/*"
+		prefix, postfix := getOperationPrefixAndPostfix(operation)
+		assert.Equal(t, "/invoke", prefix)
+		assert.Equal(t, "/a/b/*", postfix)
 	})
 }
 

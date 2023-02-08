@@ -1,21 +1,14 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package kubernetes
 
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -397,8 +390,11 @@ func TestWaitUntilServiceStateAndGetExternalURL(t *testing.T) {
 	fakeExternalIP := "10.10.10.100"
 	testApp := testAppDescription()
 
+	// Set fake minikube node IP address
+	oldMinikubeIP := os.Getenv(MiniKubeIPEnvVar)
+
 	t.Run("Minikube environment", func(t *testing.T) {
-		t.Setenv(MiniKubeIPEnvVar, fakeMinikubeNodeIP)
+		os.Setenv(MiniKubeIPEnvVar, fakeMinikubeNodeIP)
 
 		client := newFakeKubeClient()
 		// Set up reactor to fake verb
@@ -431,7 +427,7 @@ func TestWaitUntilServiceStateAndGetExternalURL(t *testing.T) {
 	t.Run("Kubernetes environment", func(t *testing.T) {
 		getVerbCalled := 0
 		const expectedGetVerbCalled = 2
-		t.Setenv(MiniKubeIPEnvVar, "")
+		os.Setenv(MiniKubeIPEnvVar, "")
 
 		client := newFakeKubeClient()
 		// Set up reactor to fake verb
@@ -479,6 +475,9 @@ func TestWaitUntilServiceStateAndGetExternalURL(t *testing.T) {
 		assert.Equal(t, fmt.Sprintf("%s:%d", fakeExternalIP, fakeNodePort), externalURL)
 		assert.Equal(t, expectedGetVerbCalled, getVerbCalled)
 	})
+
+	// Recover minikube ip environment variable
+	os.Setenv(MiniKubeIPEnvVar, oldMinikubeIP)
 }
 
 func TestWaitUntilServiceStateDeleted(t *testing.T) {

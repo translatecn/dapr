@@ -1,25 +1,17 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package actors
 
 import (
 	"time"
 
-	daprAppConfig "github.com/dapr/dapr/pkg/config"
+	app_config "github.com/dapr/dapr/pkg/config"
 )
 
-// Config is the actor runtime configuration.
+// Config actor 运行时配置
 type Config struct {
 	HostAddress                   string
 	AppID                         string
@@ -32,157 +24,57 @@ type Config struct {
 	DrainOngoingCallTimeout       time.Duration
 	DrainRebalancedActors         bool
 	Namespace                     string
-	Reentrancy                    daprAppConfig.ReentrancyConfig
-	RemindersStoragePartitions    int
-	EntityConfigs                 map[string]EntityConfig
-}
-
-// Remap of daprAppConfig.EntityConfig but with more useful types for actors.go.
-type EntityConfig struct {
-	Entities                   []string
-	ActorIdleTimeout           time.Duration
-	DrainOngoingCallTimeout    time.Duration
-	DrainRebalancedActors      bool
-	ReentrancyConfig           daprAppConfig.ReentrancyConfig
-	RemindersStoragePartitions int
+	Reentrancy                    app_config.ReentrancyConfig
+	RemindersStoragePartitions    int // 从应用程序获取
 }
 
 const (
-	defaultActorIdleTimeout     = time.Minute * 60
+	defaultActorIdleTimeout     = time.Minute * 60 // 空闲时间
 	defaultHeartbeatInterval    = time.Second * 1
-	defaultActorScanInterval    = time.Second * 30
+	defaultActorScanInterval    = time.Second * 30 //
 	defaultOngoingCallTimeout   = time.Second * 60
 	defaultReentrancyStackLimit = 32
 )
 
-// ConfigOpts contains options for NewConfig.
-type ConfigOpts struct {
-	HostAddress        string
-	AppID              string
-	PlacementAddresses []string
-	Port               int
-	Namespace          string
-	AppConfig          daprAppConfig.ApplicationConfig
-}
-
-// NewConfig returns the actor runtime configuration.
-func NewConfig(opts ConfigOpts) Config {
+// NewConfig 返回一个 actor 运行时配置
+func NewConfig(hostAddress, appID string, placementAddresses []string, hostedActors []string, port int,
+	actorScanInterval, actorIdleTimeout, ongoingCallTimeout string, drainRebalancedActors bool, namespace string,
+	reentrancy app_config.ReentrancyConfig, remindersStoragePartitions int) Config {
 	c := Config{
-		HostAddress:                   opts.HostAddress,
-		AppID:                         opts.AppID,
-		PlacementAddresses:            opts.PlacementAddresses,
-		Port:                          opts.Port,
-		Namespace:                     opts.Namespace,
-		DrainRebalancedActors:         opts.AppConfig.DrainRebalancedActors,
-		HostedActorTypes:              opts.AppConfig.Entities,
-		Reentrancy:                    opts.AppConfig.Reentrancy,
-		RemindersStoragePartitions:    opts.AppConfig.RemindersStoragePartitions,
+		HostAddress:                   hostAddress, // 10.10.16.143
+		AppID:                         appID,
+		PlacementAddresses:            placementAddresses, // [dapr-placement-server.dapr-system.svc.cluster.local:50005]
+		HostedActorTypes:              hostedActors,// actorType-a,actorType-b,actorType-c
+		Port:                          port,
 		HeartbeatInterval:             defaultHeartbeatInterval,
-		ActorDeactivationScanInterval: defaultActorScanInterval,
+		ActorDeactivationScanInterval: defaultActorScanInterval, // 失活扫描触发器
 		ActorIdleTimeout:              defaultActorIdleTimeout,
 		DrainOngoingCallTimeout:       defaultOngoingCallTimeout,
-		EntityConfigs:                 make(map[string]EntityConfig),
+		DrainRebalancedActors:         drainRebalancedActors,
+		Namespace:                     namespace,
+		Reentrancy:                    reentrancy,
+		RemindersStoragePartitions:    remindersStoragePartitions,
 	}
 
-	scanDuration, err := time.ParseDuration(opts.AppConfig.ActorScanInterval)
+	scanDuration, err := time.ParseDuration(actorScanInterval)
 	if err == nil {
 		c.ActorDeactivationScanInterval = scanDuration
 	}
 
-	idleDuration, err := time.ParseDuration(opts.AppConfig.ActorIdleTimeout)
+	idleDuration, err := time.ParseDuration(actorIdleTimeout)
 	if err == nil {
 		c.ActorIdleTimeout = idleDuration
 	}
 
-	drainCallDuration, err := time.ParseDuration(opts.AppConfig.DrainOngoingCallTimeout)
+	drainCallDuration, err := time.ParseDuration(ongoingCallTimeout)
 	if err == nil {
 		c.DrainOngoingCallTimeout = drainCallDuration
 	}
 
-	if opts.AppConfig.Reentrancy.MaxStackDepth == nil {
+	if reentrancy.MaxStackDepth == nil {
 		reentrancyLimit := defaultReentrancyStackLimit
 		c.Reentrancy.MaxStackDepth = &reentrancyLimit
 	}
 
-	// Make a map of the hosted actors so we can reference it below.
-	hostedTypes := make(map[string]bool, len(opts.AppConfig.Entities))
-	for _, hostedType := range opts.AppConfig.Entities {
-		hostedTypes[hostedType] = true
-	}
-
-	for _, entityConfg := range opts.AppConfig.EntityConfigs {
-		config := translateEntityConfig(entityConfg)
-		for _, entity := range entityConfg.Entities {
-			if _, ok := hostedTypes[entity]; ok {
-				c.EntityConfigs[entity] = config
-			} else {
-				log.Warnf("Configuration specified for non-hosted actor type: %s", entity)
-			}
-		}
-	}
-
 	return c
-}
-
-func (c *Config) GetIdleTimeoutForType(actorType string) time.Duration {
-	if val, ok := c.EntityConfigs[actorType]; ok {
-		return val.ActorIdleTimeout
-	}
-	return c.ActorIdleTimeout
-}
-
-func (c *Config) GetDrainOngoingTimeoutForType(actorType string) time.Duration {
-	if val, ok := c.EntityConfigs[actorType]; ok {
-		return val.DrainOngoingCallTimeout
-	}
-	return c.DrainOngoingCallTimeout
-}
-
-func (c *Config) GetDrainRebalancedActorsForType(actorType string) bool {
-	if val, ok := c.EntityConfigs[actorType]; ok {
-		return val.DrainRebalancedActors
-	}
-	return c.DrainRebalancedActors
-}
-
-func (c *Config) GetReentrancyForType(actorType string) daprAppConfig.ReentrancyConfig {
-	if val, ok := c.EntityConfigs[actorType]; ok {
-		return val.ReentrancyConfig
-	}
-	return c.Reentrancy
-}
-
-func (c *Config) GetRemindersPartitionCountForType(actorType string) int {
-	if val, ok := c.EntityConfigs[actorType]; ok {
-		return val.RemindersStoragePartitions
-	}
-	return c.RemindersStoragePartitions
-}
-
-func translateEntityConfig(appConfig daprAppConfig.EntityConfig) EntityConfig {
-	domainConfig := EntityConfig{
-		Entities:                   appConfig.Entities,
-		ActorIdleTimeout:           defaultActorIdleTimeout,
-		DrainOngoingCallTimeout:    defaultOngoingCallTimeout,
-		DrainRebalancedActors:      appConfig.DrainRebalancedActors,
-		ReentrancyConfig:           appConfig.Reentrancy,
-		RemindersStoragePartitions: appConfig.RemindersStoragePartitions,
-	}
-
-	idleDuration, err := time.ParseDuration(appConfig.ActorIdleTimeout)
-	if err == nil {
-		domainConfig.ActorIdleTimeout = idleDuration
-	}
-
-	drainCallDuration, err := time.ParseDuration(appConfig.DrainOngoingCallTimeout)
-	if err == nil {
-		domainConfig.DrainOngoingCallTimeout = drainCallDuration
-	}
-
-	if appConfig.Reentrancy.MaxStackDepth == nil {
-		reentrancyLimit := defaultReentrancyStackLimit
-		domainConfig.ReentrancyConfig.MaxStackDepth = &reentrancyLimit
-	}
-
-	return domainConfig
 }

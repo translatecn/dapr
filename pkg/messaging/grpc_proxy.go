@@ -1,39 +1,34 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package messaging
 
 import (
 	"context"
-	"errors"
-	"fmt"
 
+	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	grpc_proxy "github.com/dapr/dapr/pkg/grpc/proxy"
+	codec "github.com/dapr/dapr/pkg/grpc/proxy/codec"
+
 	"github.com/dapr/dapr/pkg/acl"
 	"github.com/dapr/dapr/pkg/config"
 	"github.com/dapr/dapr/pkg/diagnostics"
-	grpcProxy "github.com/dapr/dapr/pkg/grpc/proxy"
-	codec "github.com/dapr/dapr/pkg/grpc/proxy/codec"
-	invokev1 "github.com/dapr/dapr/pkg/messaging/v1"
 	"github.com/dapr/dapr/pkg/proto/common/v1"
-	"github.com/dapr/dapr/pkg/resiliency"
 )
 
-// Proxy is the interface for a gRPC transparent proxy.
+const (
+	// GRPCFeatureName 是启用代理所需的Dapr配置的功能名称。
+	GRPCFeatureName = "proxy.grpc"
+)
+
+// Proxy 是一个gRPC透明代理的接口。
 type Proxy interface {
 	Handler() grpc.StreamHandler
 	SetRemoteAppFn(func(string) (remoteApp, error))
@@ -42,104 +37,72 @@ type Proxy interface {
 
 type proxy struct {
 	appID             string
-	appClientFn       func() (grpc.ClientConnInterface, error)
 	connectionFactory messageClientConnection
 	remoteAppFn       func(appID string) (remoteApp, error)
+	remotePort        int
 	telemetryFn       func(context.Context) context.Context
+	localAppAddress   string
 	acl               *config.AccessControlList
-	resiliency        resiliency.Provider
-}
-
-// ProxyOpts is the struct with options for NewProxy.
-type ProxyOpts struct {
-	AppClientFn       func() (grpc.ClientConnInterface, error)
-	ConnectionFactory messageClientConnection
-	AppID             string
-	ACL               *config.AccessControlList
-	Resiliency        resiliency.Provider
 }
 
 // NewProxy returns a new proxy.
-func NewProxy(opts ProxyOpts) Proxy {
+func NewProxy(connectionFactory messageClientConnection, appID string, localAppAddress string, remoteDaprPort int, acl *config.AccessControlList) Proxy {
 	return &proxy{
-		appClientFn:       opts.AppClientFn,
-		appID:             opts.AppID,
-		connectionFactory: opts.ConnectionFactory,
-		acl:               opts.ACL,
-		resiliency:        opts.Resiliency,
+		appID:             appID,
+		connectionFactory: connectionFactory,
+		localAppAddress:   localAppAddress,
+		remotePort:        remoteDaprPort,
+		acl:               acl,
 	}
 }
 
-// Handler returns a Stream Handler for handling requests that arrive for services that are not recognized by the server.
+// Handler 返回一个流处理程序，用于处理到达的、不被服务器识别的服务的请求。
 func (p *proxy) Handler() grpc.StreamHandler {
-	return grpcProxy.TransparentHandler(p.intercept,
-		func(appID, methodName string) *resiliency.PolicyDefinition {
-			_, isLocal, err := p.isLocal(appID)
-			if err == nil && !isLocal {
-				return p.resiliency.EndpointPolicy(appID, appID+":"+methodName)
-			}
-
-			return resiliency.NoOp{}.EndpointPolicy("", "")
-		},
-		grpcProxy.DirectorConnectionFactory(p.connectionFactory),
-	)
+	return grpc_proxy.TransparentHandler(p.intercept)
 }
 
-func nopTeardown(destroy bool) {
-	// Nop
-}
-
-func (p *proxy) intercept(ctx context.Context, fullName string) (context.Context, *grpc.ClientConn, *grpcProxy.ProxyTarget, func(destroy bool), error) {
+func (p *proxy) intercept(ctx context.Context, fullName string) (context.Context, *grpc.ClientConn, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
 
-	v := md[diagnostics.GRPCProxyAppIDKey]
+	v := md.Get(diagnostics.GRPCProxyAppIDKey)
 	if len(v) == 0 {
-		return ctx, nil, nil, nopTeardown, fmt.Errorf("failed to proxy request: required metadata %s not found", diagnostics.GRPCProxyAppIDKey)
+		return ctx, nil, errors.Errorf("failed to proxy request: required metadata %s not found", diagnostics.GRPCProxyAppIDKey)
 	}
 
 	outCtx := metadata.NewOutgoingContext(ctx, md.Copy())
 	appID := v[0]
 
-	if p.remoteAppFn == nil {
-		return ctx, nil, nil, nopTeardown, errors.New("failed to proxy request: proxy not initialized. daprd startup may be incomplete")
-	}
-
-	target, isLocal, err := p.isLocal(appID)
-	if err != nil {
-		return ctx, nil, nil, nopTeardown, err
-	}
-
-	if isLocal {
+	if appID == p.appID {
 		// proxy locally to the app
 		if p.acl != nil {
-			ok, authError := acl.ApplyAccessControlPolicies(ctx, fullName, common.HTTPExtension_NONE, config.GRPCProtocol, p.acl) //nolint:nosnakecase
+			ok, authError := acl.ApplyAccessControlPolicies(ctx, fullName, common.HTTPExtension_NONE, config.GRPCProtocol, p.acl)
 			if !ok {
-				return ctx, nil, nil, nopTeardown, status.Errorf(codes.PermissionDenied, authError)
+				return ctx, nil, status.Errorf(codes.PermissionDenied, authError)
 			}
 		}
 
-		var appClient grpc.ClientConnInterface
-		appClient, err = p.appClientFn()
-		if err != nil {
-			return ctx, nil, nil, nopTeardown, err
-		}
-		return outCtx, appClient.(*grpc.ClientConn), nil, nopTeardown, nil
+		conn, err := p.connectionFactory(
+			outCtx, p.localAppAddress, p.appID,
+			"", true, false, false,
+			grpc.WithDefaultCallOptions(grpc.CallContentSubtype((&codec.Proxy{}).Name())),
+		)
+		return outCtx, conn, err
 	}
 
 	// proxy to a remote daprd
-	conn, teardown, cErr := p.connectionFactory(outCtx, target.address, target.id, target.namespace,
-		grpc.WithDefaultCallOptions(grpc.CallContentSubtype((&codec.Proxy{}).Name())),
-	)
-	outCtx = p.telemetryFn(outCtx)
-	outCtx = metadata.AppendToOutgoingContext(outCtx, invokev1.CallerIDHeader, p.appID, invokev1.CalleeIDHeader, target.id)
-
-	pt := &grpcProxy.ProxyTarget{
-		ID:        target.id,
-		Namespace: target.namespace,
-		Address:   target.address,
+	remote, err := p.remoteAppFn(appID)
+	if err != nil {
+		return ctx, nil, err
 	}
 
-	return outCtx, conn, pt, teardown, cErr
+	conn, err := p.connectionFactory(
+		outCtx, remote.address, remote.id, remote.namespace,
+		false, false,
+		false, grpc.WithDefaultCallOptions(grpc.CallContentSubtype((&codec.Proxy{}).Name())),
+	)
+	outCtx = p.telemetryFn(outCtx)
+
+	return outCtx, conn, err
 }
 
 // SetRemoteAppFn sets a function that helps the proxy resolve an app ID to an actual address.
@@ -150,16 +113,4 @@ func (p *proxy) SetRemoteAppFn(remoteAppFn func(appID string) (remoteApp, error)
 // SetTelemetryFn sets a function that enriches the context with telemetry.
 func (p *proxy) SetTelemetryFn(spanFn func(context.Context) context.Context) {
 	p.telemetryFn = spanFn
-}
-
-func (p *proxy) isLocal(appID string) (remoteApp, bool, error) {
-	if p.remoteAppFn == nil {
-		return remoteApp{}, false, errors.New("failed to proxy request: proxy not initialized; daprd startup may be incomplete")
-	}
-
-	target, err := p.remoteAppFn(appID)
-	if err != nil {
-		return remoteApp{}, false, err
-	}
-	return target, target.id == p.appID, nil
 }

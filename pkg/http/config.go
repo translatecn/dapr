@@ -1,31 +1,40 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package http
 
-// ServerConfig holds config values for an HTTP server.
+// ServerConfig  HTTP server 的配置
 type ServerConfig struct {
+	AllowedOrigins     string
 	AppID              string
 	HostAddress        string
 	Port               int
 	APIListenAddresses []string
-	PublicPort         *int
-	ProfilePort        int
-	AllowedOrigins     string
-	EnableProfiling    bool
+	PublicPort         *int // 服务暴露的端口
+	ProfilePort        int  // 性能分析暴露的端口
+	EnableProfiling    bool // 是否允许 性能分析
 	MaxRequestBodySize int
 	UnixDomainSocket   string
 	ReadBufferSize     int
-	EnableAPILogging   bool
-	APILogHealthChecks bool
+	StreamRequestBody  bool
+}
+
+// NewServerConfig 返回HTTP server 配置
+func NewServerConfig(appID string, hostAddress string, port int, apiListenAddresses []string, publicPort *int, profilePort int, allowedOrigins string, enableProfiling bool, maxRequestBodySize int, unixDomainSocket string, readBufferSize int, streamRequestBody bool) ServerConfig {
+	return ServerConfig{
+		AllowedOrigins:     allowedOrigins,
+		AppID:              appID,
+		HostAddress:        hostAddress,
+		Port:               port,
+		APIListenAddresses: apiListenAddresses,
+		PublicPort:         publicPort,
+		ProfilePort:        profilePort,
+		EnableProfiling:    enableProfiling,
+		MaxRequestBodySize: maxRequestBodySize,
+		UnixDomainSocket:   unixDomainSocket,
+		ReadBufferSize:     readBufferSize,
+		StreamRequestBody:  streamRequestBody,
+	}
 }

@@ -1,35 +1,29 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package utils
 
 import (
-	"fmt"
-	"io/fs"
-	"os"
+	"flag"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
-	"golang.org/x/exp/slices"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/homedir"
 )
 
 var (
-	clientSet     *kubernetes.Clientset
-	kubeConfig    *rest.Config
-	KubeConfigVar = "KUBE_CONFIG"
+	clientSet  *kubernetes.Clientset
+	kubeConfig *rest.Config
+
+	envRegexp = regexp.MustCompile(`(?m)(,)\s*[a-zA-Z\_][a-zA-Z0-9\_]*=`)
 )
 
 func initKubeConfig() {
@@ -42,14 +36,23 @@ func initKubeConfig() {
 	clientSet = clientset
 }
 
-// GetConfig gets a kubernetes rest config.
+// GetConfig 获取k8s配置文件
 func GetConfig() *rest.Config {
 	if kubeConfig != nil {
 		return kubeConfig
 	}
+
+	var kubeconfig *string
+	if home := homedir.HomeDir(); home != "" {
+		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
+	} else {
+		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
+	}
+	flag.Parse()
+
 	conf, err := rest.InClusterConfig()
 	if err != nil {
-		conf, err = clientcmd.BuildConfigFromFlags("", os.Getenv(KubeConfigVar))
+		conf, err = clientcmd.BuildConfigFromFlags("", *kubeconfig)
 		if err != nil {
 			panic(err)
 		}
@@ -58,7 +61,7 @@ func GetConfig() *rest.Config {
 	return conf
 }
 
-// GetKubeClient gets a kubernetes client.
+// GetKubeClient k8s客户端
 func GetKubeClient() *kubernetes.Clientset {
 	if clientSet == nil {
 		initKubeConfig()
@@ -67,113 +70,44 @@ func GetKubeClient() *kubernetes.Clientset {
 	return clientSet
 }
 
-// Contains reports whether v is present in s.
-// Similar to https://pkg.go.dev/golang.org/x/exp/slices#Contains.
-func Contains[T comparable](s []T, v T) bool {
-	for _, e := range s {
-		if e == v {
+// ToISO8601DateTimeString converts dateTime to ISO8601 Format
+// ISO8601 Format: 2020-01-01T01:01:01.10101Z.
+func ToISO8601DateTimeString(dateTime time.Time) string {
+	return dateTime.UTC().Format("2006-01-02T15:04:05.999999Z")
+}
+
+// ParseEnvString 从声明中添加env-vars
+func ParseEnvString(envStr string) []corev1.EnvVar {
+	indexes := envRegexp.FindAllStringIndex(envStr, -1)
+	lastEnd := len(envStr)
+	parts := make([]string, len(indexes)+1)
+	for i := len(indexes) - 1; i >= 0; i-- {
+		parts[i+1] = strings.TrimSpace(envStr[indexes[i][0]+1 : lastEnd])
+		lastEnd = indexes[i][0]
+	}
+	parts[0] = envStr[0:lastEnd]
+
+	envVars := make([]corev1.EnvVar, 0)
+	for _, s := range parts {
+		pairs := strings.Split(strings.TrimSpace(s), "=")
+		if len(pairs) != 2 {
+			continue
+		}
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  pairs[0],
+			Value: pairs[1],
+		})
+	}
+
+	return envVars
+}
+
+// StringSliceContains 判断字符在切片中是否存在
+func StringSliceContains(needle string, haystack []string) bool {
+	for _, item := range haystack {
+		if item == needle {
 			return true
 		}
 	}
 	return false
-}
-
-// SetEnvVariables set variables to environment.
-func SetEnvVariables(variables map[string]string) error {
-	for key, value := range variables {
-		err := os.Setenv(key, value)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// GetEnvOrElse get the value from the OS environment or use the else value if variable is not present.
-func GetEnvOrElse(name, orElse string) string {
-	if value, ok := os.LookupEnv(name); ok {
-		return value
-	}
-	return orElse
-}
-
-// IsTruthy returns true if a string is a truthy value.
-// Truthy values are "y", "yes", "true", "t", "on", "1" (case-insensitive); everything else is false.
-func IsTruthy(val string) bool {
-	switch strings.ToLower(strings.TrimSpace(val)) {
-	case "y", "yes", "true", "t", "on", "1":
-		return true
-	default:
-		return false
-	}
-}
-
-// IsYaml checks whether the file is yaml or not.
-func IsYaml(fileName string) bool {
-	extension := strings.ToLower(filepath.Ext(fileName))
-	if extension == ".yaml" || extension == ".yml" {
-		return true
-	}
-	return false
-}
-
-// GetIntValOrDefault returns an int value if greater than 0 OR default value.
-func GetIntValOrDefault(val int, defaultValue int) int {
-	if val > 0 {
-		return val
-	}
-	return defaultValue
-}
-
-// IsSocket returns if the given file is a unix socket.
-func IsSocket(f fs.FileInfo) bool {
-	return f.Mode()&fs.ModeSocket != 0
-}
-
-// SocketExists returns true if the file in that path is an unix socket.
-func SocketExists(socketPath string) bool {
-	if s, err := os.Stat(socketPath); err == nil {
-		return IsSocket(s)
-	}
-	return false
-}
-
-func PopulateMetadataForBulkPublishEntry(reqMeta, entryMeta map[string]string) map[string]string {
-	resMeta := map[string]string{}
-	for k, v := range entryMeta {
-		resMeta[k] = v
-	}
-	for k, v := range reqMeta {
-		if _, ok := resMeta[k]; !ok {
-			// Populate only metadata key that is already not present in the entry level metadata map
-			resMeta[k] = v
-		}
-	}
-
-	return resMeta
-}
-
-// Filter returns a new slice containing all items in the given slice that satisfy the given test.
-func Filter[T any](items []T, test func(item T) bool) []T {
-	filteredItems := make([]T, 0, len(items))
-	for _, value := range items {
-		if test(value) {
-			filteredItems = append(filteredItems, value)
-		}
-	}
-	return slices.Clip(filteredItems)
-}
-
-const (
-	logNameFmt        = "%s (%s)"
-	logNameVersionFmt = "%s (%s/%s)"
-)
-
-// ComponentLogName returns the name of a component that can be used in logging.
-func ComponentLogName(name, typ, version string) string {
-	if version == "" {
-		return fmt.Sprintf(logNameFmt, name, typ)
-	}
-
-	return fmt.Sprintf(logNameVersionFmt, name, typ, version)
 }

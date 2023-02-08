@@ -1,20 +1,13 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package placement
 
 import (
 	"context"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -24,7 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
 	"github.com/dapr/dapr/pkg/placement/raft"
@@ -32,6 +24,34 @@ import (
 )
 
 const testStreamSendLatency = 50 * time.Millisecond
+
+var testRaftServer *raft.Server
+
+// TestMain is executed only one time in the entire package to
+// start test raft server.
+func TestMain(m *testing.M) {
+	testRaftServer = raft.New("testnode", true, []raft.PeerInfo{
+		{
+			ID:      "testnode",
+			Address: "127.0.0.1:6060",
+		},
+	}, "")
+
+	testRaftServer.StartRaft(nil)
+
+	// 等待，直到测试raft节点成为leader
+	for range time.Tick(200 * time.Millisecond) {
+		if testRaftServer.IsLeader() {
+			break
+		}
+	}
+
+	retVal := m.Run()
+
+	testRaftServer.Shutdown()
+
+	os.Exit(retVal)
+}
 
 func newTestPlacementServer(raftServer *raft.Server) (string, *Service, func()) {
 	testServer := NewPlacementService(raftServer)
@@ -53,8 +73,8 @@ func newTestPlacementServer(raftServer *raft.Server) (string, *Service, func()) 
 	return serverAddress, testServer, cleanUpFn
 }
 
-func newTestClient(serverAddress string) (*grpc.ClientConn, v1pb.Placement_ReportDaprStatusClient, error) { //nolint:nosnakecase
-	conn, err := grpc.Dial(serverAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+func newTestClient(serverAddress string) (*grpc.ClientConn, v1pb.Placement_ReportDaprStatusClient, error) {
+	conn, err := grpc.Dial(serverAddress, grpc.WithInsecure())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -173,10 +193,7 @@ func TestMemberRegistration_Leadership(t *testing.T) {
 			assert.Equal(t, host.Name, memberChange.host.Name)
 			assert.Equal(t, host.Id, memberChange.host.AppID)
 			assert.EqualValues(t, host.Entities, memberChange.host.Entities)
-			testServer.streamConnPoolLock.Lock()
-			l := len(testServer.streamConnPool)
-			testServer.streamConnPoolLock.Unlock()
-			assert.Equal(t, 1, l)
+			assert.Equal(t, 1, len(testServer.streamConnPool))
 
 		case <-time.After(testStreamSendLatency):
 			require.True(t, false, "no membership change")

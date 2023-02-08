@@ -1,0 +1,150 @@
+# ------------------------------------------------------------
+# Copyright (c) Microsoft Corporation and Dapr Contributors.
+# Licensed under the MIT License.
+# ------------------------------------------------------------
+# dapr级别的订阅设置
+apiVersion: dapr.io/v1alpha1
+kind: Subscription
+metadata:
+  name: redis-sub-topic-a
+  namespace: mesoid
+spec:
+  topic: topic-a
+  route: /dsstatus
+  pubsubname: redis-pubsub
+scopes:
+  - app01
+#route 告诉 Dapr 将所有主题消息发送到应用程序中的 /dsstatus 端点。
+#scopes 为 app1 和 app2 启用订阅。
+---
+#apiVersion: dapr.io/v2alpha1
+#kind: Subscription
+#metadata:
+#  name: mysubscriptions
+#  namespace: default
+#spec:
+#  pubsubname: pubsub
+#  topic: inventory
+#  routes:
+#    rules:
+#      - match: "event.type == 'widget'"
+#        path: widgets
+#      - match: "event.type == 'gadget'"
+#        path: gadgets
+#    default: products
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: redis-pubsub
+  namespace: mesoid
+spec:
+  type: pubsub.redis
+  version: v1
+  metadata:
+#   required
+    - name: redisHost
+      value: "dapr-redis-svc:45454"
+    - name: redisPassword
+      value: "1234"
+# 消费者组的ID
+    - name: consumerID
+      value: "123"
+#     毫秒
+    - name: processingTimeout
+      value: 3
+#     毫秒
+    - name: redeliverInterval
+      value: 3
+    - name: queueDepth
+      value: 3
+#     消费数据的并发发数
+    - name: concurrency
+      value: 3
+    - name: maxLenApprox
+      value: 3
+#    https://docs.dapr.io/zh-hans/developing-applications/building-blocks/pubsub/pubsub-scopes/
+#    只有这里合规，Subscription才会生效
+    - name: subscriptionScopes
+      value: "dp-61c2cb20562850d49d47d1c7-executorapp=e,f,g,h,topic-a,topic-b;;"
+    - name: publishingScopes
+      value: "dp-61c2cb20562850d49d47d1c7-executorapp=a,b,c,d,topic-a,topic-b;"
+#       相当于二次限制
+    - name: allowedTopics
+      value: "a,b,c,d,f,e,g,h,topic-a,topic-b"
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: redis-pubsub-v2
+  namespace: mesoid
+spec:
+  type: pubsub.redis
+  version: v1
+  metadata:
+    #   required
+    - name: redisHost
+      value: "dapr-redis-svc:45454"
+    - name: redisPassword
+      value: "1234"
+    # 消费者组的ID
+    - name: consumerID
+      value: "v2"
+    - name: subscriptionScopes
+      value: "dp-61c2cb20562850d49d47d1c7-executorapp=e,f,g,h;"
+    - name: publishingScopes
+      value: "dp-61c2cb20562850d49d47d1c7-executorapp=a,b,c,d,topic-a;"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dapr-redis-config
+  namespace: mesoid
+data:
+  redis.conf: |
+    bind 0.0.0.0
+    port 6379
+    requirepass 1234
+    appendonly yes
+    protected-mode no
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dapr-redis
+  namespace: mesoid
+  labels:
+    app: dapr-redis-test
+spec:
+  containers:
+    - name: redis
+      image: redis:latest
+      command:
+        - sh
+        - -c
+        - exec redis-server /usr/local/etc/redis/redis.conf
+      ports:
+        - containerPort: 6379
+      volumeMounts:
+        - name: redis-config
+          mountPath: /usr/local/etc/redis
+  volumes:
+    - name: redis-config
+      configMap:
+        name: dapr-redis-config
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: dapr-redis-svc
+  namespace: mesoid
+  labels:
+    app: dapr-redis-test
+spec:
+  type: NodePort
+  selector:
+    app: dapr-redis-test
+  ports:
+    - protocol: TCP
+      port: 45454
+      targetPort: 6379

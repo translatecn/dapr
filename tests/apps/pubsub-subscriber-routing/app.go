@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package main
 
@@ -17,16 +9,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"sync"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"k8s.io/apimachinery/pkg/util/sets"
-
-	"github.com/dapr/dapr/tests/apps/utils"
 )
 
 const (
@@ -78,12 +68,12 @@ type rule struct {
 
 var (
 	// using sets to make the test idempotent on multiple delivery of same message
-	routedMessagesA sets.Set[string]
-	routedMessagesB sets.Set[string]
-	routedMessagesC sets.Set[string]
-	routedMessagesD sets.Set[string]
-	routedMessagesE sets.Set[string]
-	routedMessagesF sets.Set[string]
+	routedMessagesA sets.String
+	routedMessagesB sets.String
+	routedMessagesC sets.String
+	routedMessagesD sets.String
+	routedMessagesE sets.String
+	routedMessagesF sets.String
 	lock            sync.Mutex
 )
 
@@ -93,17 +83,17 @@ func initializeSets() {
 	defer lock.Unlock()
 
 	// initialize all the sets
-	routedMessagesA = sets.New[string]()
-	routedMessagesB = sets.New[string]()
-	routedMessagesC = sets.New[string]()
-	routedMessagesD = sets.New[string]()
-	routedMessagesE = sets.New[string]()
-	routedMessagesF = sets.New[string]()
+	routedMessagesA = sets.NewString()
+	routedMessagesB = sets.NewString()
+	routedMessagesC = sets.NewString()
+	routedMessagesD = sets.NewString()
+	routedMessagesE = sets.NewString()
+	routedMessagesF = sets.NewString()
 }
 
 // indexHandler is the handler for root path
 func indexHandler(w http.ResponseWriter, _ *http.Request) {
-	log.Printf("indexHandler called")
+	log.Printf("indexHandler is called\n")
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(appResponse{Message: "OK"})
@@ -112,6 +102,8 @@ func indexHandler(w http.ResponseWriter, _ *http.Request) {
 // this handles /dapr/subscribe, which is called from dapr into this app.
 // this returns the list of topics the app is subscribed to.
 func configureSubscribeHandler(w http.ResponseWriter, _ *http.Request) {
+	log.Printf("configureSubscribeHandler called\n")
+
 	t := []subscription{
 		{
 			PubsubName: pubsubName,
@@ -131,7 +123,7 @@ func configureSubscribeHandler(w http.ResponseWriter, _ *http.Request) {
 			},
 		},
 	}
-	log.Printf("configureSubscribeHandler called; subscribing to: %v\n", t)
+	log.Printf("configureSubscribeHandler subscribing to:%v\n", t)
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(t)
@@ -161,29 +153,19 @@ func eventHandlerF(w http.ResponseWriter, r *http.Request) {
 	eventHandler(w, r, routedMessagesF)
 }
 
-func eventHandler(w http.ResponseWriter, r *http.Request, set sets.Set[string]) {
-	reqID, ok := r.Context().Value("reqid").(string)
-	if reqID == "" || !ok {
-		reqID = uuid.New().String()
-	}
-
-	log.Printf("(%s) eventHandler called %s", reqID, r.URL)
-
+// this handles messages published to "pubsub-a-topic"
+func eventHandler(w http.ResponseWriter, r *http.Request, set sets.String) {
 	var err error
 	var body []byte
 	if r.Body != nil {
-		var data []byte
-		data, err = io.ReadAll(r.Body)
-		if err == nil {
-			body = data
+		if body, err = io.ReadAll(r.Body); err == nil {
+			log.Printf("assigned\n")
 		}
-	} else {
-		log.Printf("(%s) r.Body is nil", reqID)
 	}
 
-	msg, err := extractMessage(reqID, body)
+	msg, err := extractMessage(body)
 	if err != nil {
-		log.Printf("(%s) Responding with DROP. Error from extractMessage: %v", reqID, err)
+		log.Printf("Responding with DROP")
 		// Return success with DROP status to drop message
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(appResponse{
@@ -198,40 +180,42 @@ func eventHandler(w http.ResponseWriter, r *http.Request, set sets.Set[string]) 
 	set.Insert(msg)
 
 	w.WriteHeader(http.StatusOK)
-	log.Printf("(%s) Responding with SUCCESS", reqID)
+	log.Printf("Responding with SUCCESS")
 	json.NewEncoder(w).Encode(appResponse{
 		Message: "consumed",
 		Status:  "SUCCESS",
 	})
 }
 
-func extractMessage(reqID string, body []byte) (string, error) {
-	log.Printf("(%s) extractMessage() called with body=%s", reqID, string(body))
+func extractMessage(body []byte) (string, error) {
+	log.Printf("extractMessage() called")
 	if body == nil {
 		return "", errors.New("no body")
 	}
 
+	log.Printf("body=%s", string(body))
+
 	m := make(map[string]interface{})
 	err := json.Unmarshal(body, &m)
 	if err != nil {
-		log.Printf("(%s) Could not unmarshal: %v", reqID, err)
+		log.Printf("Could not unmarshal, %s", err.Error())
 		return "", err
 	}
 
 	if m["data_base64"] != nil {
 		b, err := base64.StdEncoding.DecodeString(m["data_base64"].(string))
 		if err != nil {
-			log.Printf("(%s) Could not base64 decode: %v", reqID, err)
+			log.Printf("Could not base64 decode, %s", err.Error())
 			return "", err
 		}
 
 		msg := string(b)
-		log.Printf("(%s) output from base64='%s'", reqID, msg)
+		log.Printf("output='%s'\n", msg)
 		return msg, nil
 	}
 
 	msg := m["data"].(string)
-	log.Printf("(%s) output='%s'", reqID, msg)
+	log.Printf("output='%s'\n", msg)
 
 	return msg, nil
 }
@@ -243,22 +227,19 @@ func initializeHandler(w http.ResponseWriter, _ *http.Request) {
 }
 
 // the test calls this to get the messages received
-func getReceivedMessages(w http.ResponseWriter, r *http.Request) {
-	reqID, ok := r.Context().Value("reqid").(string)
-	if reqID == "" || !ok {
-		reqID = "s-" + uuid.New().String()
-	}
+func getReceivedMessages(w http.ResponseWriter, _ *http.Request) {
+	log.Println("Enter getReceivedMessages")
 
 	response := routedMessagesResponse{
-		RouteA: unique(sets.List(routedMessagesA)),
-		RouteB: unique(sets.List(routedMessagesB)),
-		RouteC: unique(sets.List(routedMessagesC)),
-		RouteD: unique(sets.List(routedMessagesD)),
-		RouteE: unique(sets.List(routedMessagesE)),
-		RouteF: unique(sets.List(routedMessagesF)),
+		RouteA: unique(routedMessagesA.List()),
+		RouteB: unique(routedMessagesB.List()),
+		RouteC: unique(routedMessagesC.List()),
+		RouteD: unique(routedMessagesD.List()),
+		RouteE: unique(routedMessagesE.List()),
+		RouteF: unique(routedMessagesF.List()),
 	}
 
-	log.Printf("getReceivedMessages called. reqID=%s response=%s", reqID, response)
+	log.Printf("routedMessagesResponse=%s", response)
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
@@ -278,11 +259,8 @@ func unique(slice []string) []string {
 
 // appRouter initializes restful api router
 func appRouter() *mux.Router {
-	log.Printf("Called appRouter()")
+	log.Printf("Enter appRouter()")
 	router := mux.NewRouter().StrictSlash(true)
-
-	// Log requests and their processing time
-	router.Use(utils.LoggerMiddleware)
 
 	router.HandleFunc("/", indexHandler).Methods("GET")
 	router.HandleFunc("/getMessages", getReceivedMessages).Methods("POST")
@@ -302,9 +280,9 @@ func appRouter() *mux.Router {
 }
 
 func main() {
+	log.Printf("Dapr E2E test app: pubsub subscriber with routing- listening on http://localhost:%d", appPort)
+
 	// initialize sets on application start
 	initializeSets()
-
-	log.Printf("Dapr E2E test app: pubsub subscriber with routing - listening on http://localhost:%d", appPort)
-	utils.StartServer(appPort, appRouter, true, false)
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", appPort), appRouter()))
 }

@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 syntax = "proto3";
 
@@ -27,7 +19,6 @@ option go_package = "github.com/dapr/dapr/pkg/proto/runtime/v1;runtime";
 // Dapr service provides APIs to user application to access Dapr building blocks.
 service Dapr {
   // Invokes a method on a remote Dapr app.
-  // Deprecated: Use proxy mode service invocation instead.
   rpc InvokeService(InvokeServiceRequest) returns (common.v1.InvokeResponse) {}
 
   // Gets the state for a specific key.
@@ -54,9 +45,6 @@ service Dapr {
   // Publishes events to the specific topic.
   rpc PublishEvent(PublishEventRequest) returns (google.protobuf.Empty) {}
 
-  // Bulk Publishes multiple events to the specified topic.
-  rpc BulkPublishEventAlpha1(BulkPublishRequest) returns (BulkPublishResponse) {}
-
   // Invokes binding data to specific output bindings
   rpc InvokeBinding(InvokeBindingRequest) returns (InvokeBindingResponse) {}
 
@@ -78,9 +66,6 @@ service Dapr {
   // Unregister an actor reminder.
   rpc UnregisterActorReminder(UnregisterActorReminderRequest) returns (google.protobuf.Empty) {}
 
-  // Rename an actor reminder.
-  rpc RenameActorReminder(RenameActorReminderRequest) returns (google.protobuf.Empty) {}
-
   // Gets the state for a specific actor.
   rpc GetActorState(GetActorStateRequest) returns (GetActorStateResponse) {}
 
@@ -96,29 +81,11 @@ service Dapr {
   // SubscribeConfiguration gets configuration from configuration store and subscribe the updates event by grpc stream
   rpc SubscribeConfigurationAlpha1(SubscribeConfigurationRequest) returns (stream SubscribeConfigurationResponse) {}
 
-  // UnSubscribeConfiguration unsubscribe the subscription of configuration
-  rpc UnsubscribeConfigurationAlpha1(UnsubscribeConfigurationRequest) returns (UnsubscribeConfigurationResponse) {}
-
-  // TryLockAlpha1 tries to get a lock with an expiry.
-  rpc TryLockAlpha1(TryLockRequest)returns (TryLockResponse) {}
-
-  // UnlockAlpha1 unlocks a lock.
-  rpc UnlockAlpha1(UnlockRequest)returns (UnlockResponse) {}
-
   // Gets metadata of the sidecar
   rpc GetMetadata (google.protobuf.Empty) returns (GetMetadataResponse) {}
 
   // Sets value in extended metadata of the sidecar
   rpc SetMetadata (SetMetadataRequest) returns (google.protobuf.Empty) {}
-
-  // Start Workflow
-  rpc StartWorkflowAlpha1 (StartWorkflowRequest) returns (WorkflowReference) {}
-
-  // Get Workflow details
-  rpc GetWorkflowAlpha1 (GetWorkflowRequest) returns (GetWorkflowResponse) {}
-
-  // Terminate Workflow
-  rpc TerminateWorkflowAlpha1 (TerminateWorkflowRequest) returns (TerminateWorkflowResponse) {}
 
   // Shutdown the sidecar
   rpc Shutdown (google.protobuf.Empty) returns (google.protobuf.Empty) {}
@@ -145,7 +112,7 @@ message GetStateRequest {
   common.v1.StateOptions.StateConsistency consistency = 3;
 
   // The metadata which will be sent to state store components.
-  map<string, string> metadata = 4;
+  map<string,string> metadata = 4;
 }
 
 // GetBulkStateRequest is the message to get a list of key-value states from specific state store.
@@ -160,7 +127,7 @@ message GetBulkStateRequest {
   int32 parallelism = 3;
 
   // The metadata which will be sent to state store components.
-  map<string, string> metadata = 4;
+  map<string,string> metadata = 4;
 }
 
 // GetBulkStateResponse is the response conveying the list of state values.
@@ -186,7 +153,7 @@ message BulkStateItem {
   string error = 4;
 
   // The metadata which will be sent to app.
-  map<string, string> metadata = 5;
+  map<string,string> metadata = 5;
 }
 
 // GetStateResponse is the response conveying the state value and etag.
@@ -199,7 +166,7 @@ message GetStateResponse {
   string etag = 2;
 
   // The metadata which will be sent to app.
-  map<string, string> metadata = 3;
+  map<string,string> metadata = 3;
 }
 
 // DeleteStateRequest is the message to delete key-value states in the specific state store.
@@ -219,7 +186,7 @@ message DeleteStateRequest {
   common.v1.StateOptions options = 4;
 
   // The metadata which will be sent to state store components.
-  map<string, string> metadata = 5;
+  map<string,string> metadata = 5;
 }
 
 // DeleteBulkStateRequest is the message to delete a list of key-value states from specific state store.
@@ -249,7 +216,7 @@ message QueryStateRequest {
   string query = 2;
 
   // The metadata which will be sent to state store components.
-  map<string, string> metadata = 3;
+  map<string,string> metadata = 3;
 }
 
 message QueryStateItem {
@@ -276,7 +243,7 @@ message QueryStateResponse {
   string token = 2;
 
   // The metadata which will be sent to app.
-  map<string, string> metadata = 3;
+  map<string,string> metadata = 3;
 }
 
 // PublishEventRequest is the message to publish event data to pubsub topic
@@ -297,55 +264,8 @@ message PublishEventRequest {
   //
   // metadata property:
   // - key : the key of the message.
-  map<string, string> metadata = 5;
+  map<string,string> metadata = 5;
 }
-
-// BulkPublishRequest is the message to bulk publish events to pubsub topic
-message BulkPublishRequest {
-  // The name of the pubsub component
-  string pubsub_name = 1;
-
-  // The pubsub topic
-  string topic = 2;
-
-  // The entries which contain the individual events and associated details to be published
-  repeated BulkPublishRequestEntry entries = 3;
-
-  // The request level metadata passing to to the pubsub components
-  map<string, string> metadata = 4;
-}
-
-// BulkPublishRequestEntry is the message containing the event to be bulk published
-message BulkPublishRequestEntry {
-  // The request scoped unique ID referring to this message. Used to map status in response
-  string entry_id = 1;
-
-  // The event which will be pulished to the topic
-  bytes event = 2;
-
-  // The content type for the event
-  string content_type = 3;
-
-  // The event level metadata passing to the pubsub component
-  map<string, string> metadata = 4;
-}
-
-// BulkPublishResponse is the message returned from a BulkPublishEvent call
-message BulkPublishResponse {
-  // The entries for different events that failed publish in the BulkPublishEvent call
-  repeated BulkPublishResponseFailedEntry failedEntries = 1;
-}
-
-// BulkPublishResponseFailedEntry is the message containing the entryID and error of a failed event in BulkPublishEvent call
-message BulkPublishResponseFailedEntry {
-
-  // The response scoped unique ID referring to this message
-  string entry_id = 1;
-
-  // The error message if any on failure
-  string error = 2;
-}
-
 
 // InvokeBindingRequest is the message to send data to output bindings
 message InvokeBindingRequest {
@@ -356,13 +276,13 @@ message InvokeBindingRequest {
   bytes data = 2;
 
   // The metadata passing to output binding components
-  //
+  // 
   // Common metadata property:
-  // - ttlInSeconds : the time to live in seconds for the message.
-  // If set in the binding definition will cause all messages to
+  // - ttlInSeconds : the time to live in seconds for the message. 
+  // If set in the binding definition will cause all messages to 
   // have a default time to live. The message ttl overrides any value
   // in the binding definition.
-  map<string, string> metadata = 3;
+  map<string,string> metadata = 3;
 
   // The name of the operation type for the binding to invoke
   string operation = 4;
@@ -374,19 +294,19 @@ message InvokeBindingResponse {
   bytes data = 1;
 
   // The metadata returned from an external system
-  map<string, string> metadata = 2;
+  map<string,string> metadata = 2;
 }
 
 // GetSecretRequest is the message to get secret from secret store.
 message GetSecretRequest {
   // The name of secret store.
-  string store_name = 1 [json_name = "storeName"];
+  string store_name = 1;
 
   // The name of secret key.
   string key = 2;
 
   // The metadata which will be sent to secret store components.
-  map<string, string> metadata = 3;
+  map<string,string> metadata = 3;
 }
 
 // GetSecretResponse is the response message to convey the requested secret.
@@ -399,10 +319,10 @@ message GetSecretResponse {
 // GetBulkSecretRequest is the message to get the secrets from secret store.
 message GetBulkSecretRequest {
   // The name of secret store.
-  string store_name = 1 [json_name = "storeName"];
+  string store_name = 1;
 
   // The metadata which will be sent to secret store components.
-  map<string, string> metadata = 2;
+  map<string,string> metadata = 2;
 }
 
 // SecretResponse is a map of decrypted string/string values
@@ -422,7 +342,7 @@ message TransactionalStateOperation {
   // The type of operation to be executed
   string operationType = 1;
 
-  // State values to be operated on
+  // State values to be operated on 
   common.v1.StateItem request = 2;
 }
 
@@ -435,7 +355,7 @@ message ExecuteStateTransactionRequest {
   repeated TransactionalStateOperation operations = 2;
 
   // The metadata used for transactional operations.
-  map<string, string> metadata = 3;
+  map<string,string> metadata = 3;
 }
 
 // RegisterActorTimerRequest is the message to register a timer for an actor of a given type and id.
@@ -475,14 +395,6 @@ message UnregisterActorReminderRequest {
   string name = 3;
 }
 
-// RenameActorReminderRequest is the message to rename an actor reminder.
-message RenameActorReminderRequest {
-  string actor_type = 1;
-  string actor_id = 2;
-  string old_name = 3;
-  string new_name = 4;
-}
-
 // GetActorStateRequest is the message to get key-value states from specific actor.
 message GetActorStateRequest {
   string actor_type = 1;
@@ -502,7 +414,7 @@ message ExecuteActorStateTransactionRequest {
   repeated TransactionalActorStateOperation operations = 3;
 }
 
-// TransactionalActorStateOperation is the message to execute a specified operation with a key-value pair.
+// TransactionalAcorStateOperation is the message to execute a specified operation with a key-value pair.
 message TransactionalActorStateOperation {
   string operationType = 1;
   string key = 2;
@@ -515,7 +427,6 @@ message InvokeActorRequest {
   string actor_id = 2;
   string method = 3;
   bytes  data = 4;
-  map<string, string> metadata = 5;
 }
 
 // InvokeActorResponse is the method that returns an actor invocation response.
@@ -528,8 +439,7 @@ message GetMetadataResponse {
   string id = 1;
   repeated ActiveActorsCount active_actors_count = 2;
   repeated RegisteredComponents registered_components = 3;
-  map<string, string> extended_metadata = 4;
-  repeated PubsubSubscription subscriptions = 5;
+  map<string,string> extended_metadata = 4;
 }
 
 message ActiveActorsCount {
@@ -541,24 +451,6 @@ message RegisteredComponents {
   string name = 1;
   string type = 2;
   string version = 3;
-  repeated string capabilities = 4;
-}
-
-message PubsubSubscription {
-  string pubsub_name = 1;
-  string topic = 2;
-  map<string,string> metadata = 3;
-  PubsubSubscriptionRules rules = 4;
-  string dead_letter_topic = 5;
-}
-
-message PubsubSubscriptionRules {
-  repeated PubsubSubscriptionRule rules = 1;
-}
-
-message PubsubSubscriptionRule {
-  string match = 1;
-  string path = 2;
 }
 
 message SetMetadataRequest {
@@ -577,13 +469,13 @@ message GetConfigurationRequest {
   repeated string keys = 2;
 
   // Optional. The metadata which will be sent to configuration store components.
-  map<string, string> metadata = 3;
+  map<string,string> metadata = 3;
 }
 
 // GetConfigurationResponse is the response conveying the list of configuration values.
 // It should be the FULL configuration of specified application which contains all of its configuration items.
 message GetConfigurationResponse {
-  map<string, common.v1.ConfigurationItem> items = 1;
+  repeated common.v1.ConfigurationItem items = 1;
 }
 
 // SubscribeConfigurationRequest is the message to get a list of key-value configuration from specified configuration store.
@@ -597,113 +489,11 @@ message SubscribeConfigurationRequest {
   repeated string keys = 2;
 
   // The metadata which will be sent to configuration store components.
-  map<string, string> metadata = 3;
-}
-
-// UnSubscribeConfigurationRequest is the message to stop watching the key-value configuration.
-message UnsubscribeConfigurationRequest {
-  // The name of configuration store.
-  string store_name = 1;
-
-  // The id to unsubscribe.
-  string id = 2;
+  map<string,string> metadata = 3;
 }
 
 message SubscribeConfigurationResponse {
-  // Subscribe id, used to stop subscription.
-  string id = 1;
-
   // The list of items containing configuration values
-  map<string, common.v1.ConfigurationItem> items = 2;
+  repeated common.v1.ConfigurationItem items = 1;
 }
 
-message UnsubscribeConfigurationResponse {
-  bool ok = 1;
-  string message = 2;
-}
-
-message TryLockRequest {
-  // Required. The lock store name,e.g. `redis`.
-  string store_name = 1;
-
-  // Required. resource_id is the lock key. e.g. `order_id_111`
-  // It stands for "which resource I want to protect"
-  string resource_id = 2;
-
-  // Required. lock_owner indicate the identifier of lock owner.
-  // You can generate a uuid as lock_owner.For example,in golang:
-  //
-  // req.LockOwner = uuid.New().String()
-  //
-  // This field is per request,not per process,so it is different for each request,
-  // which aims to prevent multi-thread in the same process trying the same lock concurrently.
-  //
-  // The reason why we don't make it automatically generated is:
-  // 1. If it is automatically generated,there must be a 'my_lock_owner_id' field in the response.
-  // This name is so weird that we think it is inappropriate to put it into the api spec
-  // 2. If we change the field 'my_lock_owner_id' in the response to 'lock_owner',which means the current lock owner of this lock,
-  // we find that in some lock services users can't get the current lock owner.Actually users don't need it at all.
-  // 3. When reentrant lock is needed,the existing lock_owner is required to identify client and check "whether this client can reenter this lock".
-  // So this field in the request shouldn't be removed.
-  string lock_owner = 3;
-
-  // Required. The time before expiry.The time unit is second.
-  int32 expiryInSeconds = 4;
-}
-
-
-message TryLockResponse {
-
-  bool success = 1;
-}
-
-message UnlockRequest {
-  string store_name = 1;
-  // resource_id is the lock key.
-  string resource_id = 2;
-
-  string lock_owner = 3;
-}
-
-message UnlockResponse {
-  enum Status {
-    SUCCESS = 0;
-    LOCK_DOES_NOT_EXIST = 1;
-    LOCK_BELONGS_TO_OTHERS = 2;
-    INTERNAL_ERROR = 3;
-  }
-
-  Status status = 1;
-}
-
-message WorkflowReference {
-  string instance_id = 1;
-}
-
-message GetWorkflowRequest {
-  string instance_id  = 1;
-  string workflow_type = 2;
-  string workflow_component = 3;
-}
-
-message GetWorkflowResponse {
-  string instance_id = 1;
-  int64 start_time = 2;
-  map<string, string> metadata = 3;
-}
-
-message StartWorkflowRequest {
-  string instance_id = 1;
-  string workflow_component = 2;
-  string workflow_name = 3;
-  map<string, string> options = 4;
-  bytes input = 5;
-}
-
-message TerminateWorkflowRequest {
-  string instance_id = 1;
-  string workflow_component = 2;
-}
-
-message TerminateWorkflowResponse {
-}

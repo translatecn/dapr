@@ -1,47 +1,36 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package actors
 
-// OperationType describes a CRUD operation performed against a state store.
+// OperationType 描述一个针对状态存储的CRUD操作。
 type OperationType string
 
-// Upsert is an update or create operation.
 const Upsert OperationType = "upsert"
-
-// Delete is a delete operation.
 const Delete OperationType = "delete"
 
-// TransactionalRequest describes a set of stateful operations for a given actor that are performed in a transactional manner.
+// TransactionalRequest 描述了一个给定行为体的一组有状态的操作，这些操作以事务性方式执行。
 type TransactionalRequest struct {
 	Operations []TransactionalOperation `json:"operations"`
 	ActorType  string
 	ActorID    string
 }
 
-// TransactionalOperation is the request object for a state operation participating in a transaction.
+// TransactionalOperation  是参与一个事务的状态操作的请求对象。
 type TransactionalOperation struct {
 	Operation OperationType `json:"operation"`
 	Request   interface{}   `json:"request"`
 }
 
-// TransactionalUpsert defines a key/value pair for an upsert operation.
+// TransactionalUpsert 定义了一个用于upsert 操作的键/值对。
 type TransactionalUpsert struct {
 	Key   string      `json:"key"`
 	Value interface{} `json:"value"`
 }
 
-// TransactionalDelete defined a delete operation.
+// TransactionalDelete 定义了一个删除操作
 type TransactionalDelete struct {
 	Key string `json:"key"`
 }

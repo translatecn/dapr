@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package health
 
@@ -17,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"sync/atomic"
 	"time"
 
 	"github.com/dapr/kit/logger"
@@ -31,26 +22,25 @@ type Server interface {
 }
 
 type server struct {
-	ready *atomic.Bool
+	ready bool
 	log   logger.Logger
 }
 
 // NewServer returns a new healthz server.
 func NewServer(log logger.Logger) Server {
 	return &server{
-		log:   log,
-		ready: &atomic.Bool{},
+		log: log,
 	}
 }
 
 // Ready sets a ready state for the endpoint handlers.
 func (s *server) Ready() {
-	s.ready.Store(true)
+	s.ready = true
 }
 
 // NotReady sets a not ready state for the endpoint handlers.
 func (s *server) NotReady() {
-	s.ready.Store(false)
+	s.ready = false
 }
 
 // Run starts a net/http server with a healthz endpoint.
@@ -58,41 +48,41 @@ func (s *server) Run(ctx context.Context, port int) error {
 	router := http.NewServeMux()
 	router.Handle("/healthz", s.healthz())
 
-	//nolint:gosec
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: router,
 	}
+	// 假如 srv 启动失败,也可以关闭此 goroutine
+	doneCh := make(chan struct{})
 
 	go func() {
 		select {
 		case <-ctx.Done():
 			s.log.Info("Healthz server is shutting down")
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			shutdownCtx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*5,
+			)
 			defer cancel()
-			err := srv.Shutdown(shutdownCtx)
-			if err != nil {
-				s.log.Errorf("Error while shutting down healthz server: %v", err)
-			}
+			srv.Shutdown(shutdownCtx) // nolint: errcheck
+		case <-doneCh:
 		}
 	}()
 
 	s.log.Infof("Healthz server is listening on %s", srv.Addr)
-
-	// Blocking call
 	err := srv.ListenAndServe()
 	if err != http.ErrServerClosed {
-		return err
+		s.log.Errorf("Healthz server error: %s", err)
 	}
-
-	return nil
+	close(doneCh)
+	return err
 }
 
 // healthz is a health endpoint handler.
 func (s *server) healthz() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var status int
-		if s.ready.Load() {
+		if s.ready {
 			status = http.StatusOK
 		} else {
 			status = http.StatusServiceUnavailable

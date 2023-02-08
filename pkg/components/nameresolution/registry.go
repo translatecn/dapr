@@ -1,97 +1,90 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package nameresolution
 
 import (
-	"fmt"
 	"strings"
 
+	"github.com/pkg/errors"
+
 	nr "github.com/dapr/components-contrib/nameresolution"
+
 	"github.com/dapr/dapr/pkg/components"
-	"github.com/dapr/kit/logger"
 )
 
 type (
-	FactoryMethod func(logger.Logger) nr.Resolver
+	// NameResolution 是一个名称解析组件的定义。
+	NameResolution struct {
+		Name          string
+		FactoryMethod func() nr.Resolver
+	}
 
-	// Registry handles registering and creating name resolution components.
-	Registry struct {
-		Logger    logger.Logger
-		resolvers map[string]FactoryMethod
+	// Registry 处理注册和创建名称解析组件。
+	Registry interface {
+		Register(components ...NameResolution)
+		Create(name, version string) (nr.Resolver, error)
+	}
+
+	nameResolutionRegistry struct {
+		resolvers map[string]func() nr.Resolver
 	}
 )
 
-// DefaultRegistry is the singleton with the registry.
-var DefaultRegistry *Registry
-
-func init() {
-	DefaultRegistry = NewRegistry()
-}
-
-// NewRegistry creates a name resolution registry.
-func NewRegistry() *Registry {
-	return &Registry{
-		resolvers: map[string]FactoryMethod{},
+// New 创建一个名称解析
+func New(name string, factoryMethod func() nr.Resolver) NameResolution {
+	return NameResolution{
+		Name:          name,
+		FactoryMethod: factoryMethod,
 	}
 }
 
-// RegisterComponent adds a name resolver to the registry.
-func (s *Registry) RegisterComponent(componentFactory FactoryMethod, names ...string) {
-	for _, name := range names {
-		s.resolvers[createFullName(name)] = componentFactory
+// NewRegistry 创建一个名称解析仓库.
+func NewRegistry() Registry {
+	return &nameResolutionRegistry{
+		resolvers: map[string]func() nr.Resolver{},
 	}
 }
 
-// Create instantiates a name resolution resolver based on `name`.
-func (s *Registry) Create(name, version, logName string) (nr.Resolver, error) {
-	if method, ok := s.getResolver(createFullName(name), version, logName); ok {
+// Register 将一个或多个名称解析组件添加到注册表。
+func (s *nameResolutionRegistry) Register(components ...NameResolution) {
+	for _, component := range components {
+		s.resolvers[createFullName(component.Name)] = component.FactoryMethod
+	}
+}
+
+// Create 基于`name`实例化一个名字解析解析器。
+func (s *nameResolutionRegistry) Create(name, version string) (nr.Resolver, error) {
+	if method, ok := s.getResolver(createFullName(name), version); ok {
 		return method(), nil
 	}
-	return nil, fmt.Errorf("couldn't find name resolver %s/%s", name, version)
+	return nil, errors.Errorf("couldn't find name resolver %s/%s", name, version)
 }
 
-func (s *Registry) getResolver(name, version, logName string) (func() nr.Resolver, bool) {
-	if s.resolvers == nil {
-		return nil, false
-	}
+func (s *nameResolutionRegistry) getResolver(name, version string) (func() nr.Resolver, bool) {
 	nameLower := strings.ToLower(name)
 	versionLower := strings.ToLower(version)
 	resolverFn, ok := s.resolvers[nameLower+"/"+versionLower]
 	if ok {
-		return s.wrapFn(resolverFn, logName), true
+		return resolverFn, true
 	}
 	if components.IsInitialVersion(versionLower) {
 		resolverFn, ok = s.resolvers[nameLower]
-		if ok {
-			return s.wrapFn(resolverFn, logName), true
-		}
 	}
-	return nil, false
-}
-
-func (s *Registry) wrapFn(componentFactory FactoryMethod, logName string) func() nr.Resolver {
-	return func() nr.Resolver {
-		l := s.Logger
-		if logName != "" && l != nil {
-			l = l.WithFields(map[string]any{
-				"component": logName,
-			})
-		}
-		return componentFactory(l)
-	}
+	return resolverFn, ok
 }
 
 func createFullName(name string) string {
 	return strings.ToLower("nameresolution." + name)
 }
+
+//res   why?
+// 1、存储   以nameresolution.{name} 存储
+// 2、以{nameLower}/{versionLower} 查找
+// 2.1 以{nameLower} 查找
+
+// eg
+//  save     mockResolver/v2   				-->   nameresolution.mockResolver/v2
+//  search   nameresolution.mockResolver   v2     -->   nameresolution.mockResolver/v2

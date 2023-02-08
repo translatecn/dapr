@@ -1,33 +1,22 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package runner
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
 	"strconv"
 
-	configurationv1alpha1 "github.com/dapr/dapr/pkg/apis/configuration/v1alpha1"
 	kube "github.com/dapr/dapr/tests/platforms/kubernetes"
-
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
+	defaultImageRegistry        = "docker.io/dapriotest"
+	defaultImageTag             = "latest"
 	disableTelemetryConfig      = "disable-telemetry"
 	defaultSidecarCPULimit      = "1.0"
 	defaultSidecarMemoryLimit   = "256Mi"
@@ -54,14 +43,14 @@ func NewKubeTestPlatform() *KubeTestPlatform {
 	}
 }
 
-func (c *KubeTestPlatform) Setup() (err error) {
+func (c *KubeTestPlatform) setup() (err error) {
 	// TODO: KubeClient will be properly configured by go test arguments
 	c.KubeClient, err = kube.NewKubeClient("", "")
 
 	return
 }
 
-func (c *KubeTestPlatform) TearDown() error {
+func (c *KubeTestPlatform) tearDown() error {
 	if err := c.AppResources.tearDown(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to tear down AppResources. got: %q", err)
 	}
@@ -76,7 +65,7 @@ func (c *KubeTestPlatform) TearDown() error {
 }
 
 // addComponents adds component to disposable Resource queues.
-func (c *KubeTestPlatform) AddComponents(comps []kube.ComponentDescription) error {
+func (c *KubeTestPlatform) addComponents(comps []kube.ComponentDescription) error {
 	if c.KubeClient == nil {
 		return fmt.Errorf("kubernetes cluster needs to be setup")
 	}
@@ -94,7 +83,7 @@ func (c *KubeTestPlatform) AddComponents(comps []kube.ComponentDescription) erro
 }
 
 // addApps adds test apps to disposable App Resource queues.
-func (c *KubeTestPlatform) AddApps(apps []kube.AppDescription) error {
+func (c *KubeTestPlatform) addApps(apps []kube.AppDescription) error {
 	if c.KubeClient == nil {
 		return fmt.Errorf("kubernetes cluster needs to be setup before calling BuildAppResources")
 	}
@@ -103,17 +92,17 @@ func (c *KubeTestPlatform) AddApps(apps []kube.AppDescription) error {
 
 	for _, app := range apps {
 		if app.RegistryName == "" {
-			app.RegistryName = getTestImageRegistry()
+			app.RegistryName = c.imageRegistry()
 		}
 
 		if app.ImageSecret == "" {
-			app.ImageSecret = getTestImageSecret()
+			app.ImageSecret = c.imageSecret()
 		}
 
 		if app.ImageName == "" {
 			return fmt.Errorf("%s app doesn't have imagename property", app.AppName)
 		}
-		app.ImageName = fmt.Sprintf("%s:%s", app.ImageName, getTestImageTag())
+		app.ImageName = fmt.Sprintf("%s:%s", app.ImageName, c.imageTag())
 
 		if dt {
 			app.Config = disableTelemetryConfig
@@ -156,6 +145,30 @@ func (c *KubeTestPlatform) AddApps(apps []kube.AppDescription) error {
 	log.Printf("Apps are installed.")
 
 	return nil
+}
+
+func (c *KubeTestPlatform) imageRegistry() string {
+	reg := os.Getenv("DAPR_TEST_REGISTRY")
+	if reg == "" {
+		return defaultImageRegistry
+	}
+	return reg
+}
+
+func (c *KubeTestPlatform) imageSecret() string {
+	secret := os.Getenv("DAPR_TEST_REGISTRY_SECRET")
+	if secret == "" {
+		return ""
+	}
+	return secret
+}
+
+func (c *KubeTestPlatform) imageTag() string {
+	tag := os.Getenv("DAPR_TEST_TAG")
+	if tag == "" {
+		return defaultImageTag
+	}
+	return tag
 }
 
 func (c *KubeTestPlatform) disableTelemetry() bool {
@@ -275,33 +288,22 @@ func (c *KubeTestPlatform) SetAppEnv(name, key, value string) error {
 		return err
 	}
 
-	if _, err := appManager.WaitUntilDeploymentState(appManager.IsDeploymentDone); err != nil {
-		return err
-	}
+	_, err := appManager.WaitUntilDeploymentState(appManager.IsDeploymentDone)
 
-	appManager.StreamContainerLogs()
-
-	return nil
+	return err
 }
 
 // Restart restarts all instances for the app.
 func (c *KubeTestPlatform) Restart(name string) error {
 	// To minic the restart behavior, scale to 0 and then scale to the original replicas.
 	app := c.AppResources.FindActiveResource(name)
-	m := app.(*kube.AppManager)
-	originalReplicas := m.App().Replicas
+	originalReplicas := app.(*kube.AppManager).App().Replicas
 
 	if err := c.Scale(name, 0); err != nil {
 		return err
 	}
 
-	if err := c.Scale(name, originalReplicas); err != nil {
-		return err
-	}
-
-	m.StreamContainerLogs()
-
-	return nil
+	return c.Scale(name, originalReplicas)
 }
 
 // PortForwardToApp opens a new connection to the app on a the target port and returns the local port or error.
@@ -363,19 +365,4 @@ func getNamespaceOrDefault(namespace *string) string {
 		return kube.DaprTestNamespace
 	}
 	return *namespace
-}
-
-// GetConfiguration returns configuration by name.
-func (c *KubeTestPlatform) GetConfiguration(name string) (*configurationv1alpha1.Configuration, error) {
-	client := c.KubeClient.DaprClientSet.ConfigurationV1alpha1().Configurations(kube.DaprTestNamespace)
-	return client.Get(name, metav1.GetOptions{})
-}
-
-func (c *KubeTestPlatform) GetService(name string) (*corev1.Service, error) {
-	client := c.KubeClient.Services(kube.DaprTestNamespace)
-	return client.Get(context.Background(), name, metav1.GetOptions{})
-}
-
-func (c *KubeTestPlatform) LoadTest(loadtester LoadTester) error {
-	return loadtester.Run(c)
 }

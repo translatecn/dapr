@@ -1,17 +1,9 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
-// Package placement is an implementation of Consistent Hashing and
+// Package hashing Package placement is an implementation of Consistent Hashing and
 // Consistent Hashing With Bounded Loads.
 //
 // https://en.wikipedia.org/wiki/Consistent_hashing
@@ -19,50 +11,55 @@ limitations under the License.
 // https://research.googleblog.com/2017/04/consistent-hashing-with-bounded-loads.html
 //
 // https://github.com/lafikl/consistent/blob/master/consistent.go
+//
 package hashing
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"math"
 	"sort"
 	"sync"
 	"sync/atomic"
 
-	blake2b "github.com/minio/blake2b-simd"
+	blake2b "github.com/minio/blake2b-simd" //使用带有SIMD指令的BLAKE2b的纯Go实现进行快速散列
+	"github.com/pkg/errors"
 )
 
-var replicationFactor int
+//为了满足数据的高可用性，需要根据一些因子进行复制， 这些因子称为复制因子。
+//假设我们集群的复制因子为2，那么属于'd'节点的数据将会被复制到按顺时针方向与之相隔最近的'b'和'e'节点上。
+//这就保证了如果从'd'节点获取数据失败，这些数据能够从'b'或'e'节点获取。
 
-// ErrNoHosts is an error for no hosts.
+var replicationFactor int //复制因子,
+
+// ErrNoHosts 无主机错误
 var ErrNoHosts = errors.New("no hosts added")
 
-// ConsistentHashTables is a table holding a map of consistent hashes with a given version.
+// ConsistentHashTables 是一个包含与给定版本一致的散列映射的表。
 type ConsistentHashTables struct {
 	Version string
 	Entries map[string]*Consistent
 }
 
-// Host represents a host of stateful entities with a given name, id, port and load.
+// Host 主机信息
 type Host struct {
 	Name  string
 	Port  int64
-	Load  int64
+	Load  int64 // 负载
 	AppID string
 }
 
-// Consistent represents a data structure for consistent hashing.
+// Consistent 一致性哈希
 type Consistent struct {
-	hosts     map[uint64]string
-	sortedSet []uint64
-	loadMap   map[string]*Host
+	hosts     map[uint64]string // 对 ip:port+i 进行的hash = ip:port
+	sortedSet []uint64          // 对 ip:port+i 进行的hash    散列值[会重复replicationFactor]
+	loadMap   map[string]*Host  // 主机名与主机实例的绑定    ip:port=Host{}
 	totalLoad int64
 
 	sync.RWMutex
 }
 
-// NewPlacementTables returns new stateful placement tables with a given version.
+// NewPlacementTables 返回具有给定版本的新的有状态放置表。
 func NewPlacementTables(version string, entries map[string]*Consistent) *ConsistentHashTables {
 	return &ConsistentHashTables{
 		Version: version,
@@ -70,7 +67,7 @@ func NewPlacementTables(version string, entries map[string]*Consistent) *Consist
 	}
 }
 
-// NewHost returns a new host.
+// NewHost 返回主机
 func NewHost(name, id string, load int64, port int64) *Host {
 	return &Host{
 		Name:  name,
@@ -80,7 +77,7 @@ func NewHost(name, id string, load int64, port int64) *Host {
 	}
 }
 
-// NewConsistentHash returns a new consistent hash.
+// NewConsistentHash 返回一致性哈希
 func NewConsistentHash() *Consistent {
 	return &Consistent{
 		hosts:     map[uint64]string{},
@@ -89,7 +86,7 @@ func NewConsistentHash() *Consistent {
 	}
 }
 
-// NewFromExisting creates a new consistent hash from existing values.
+// NewFromExisting 使用已存在的值创建一个一致性哈希表
 func NewFromExisting(hosts map[uint64]string, sortedSet []uint64, loadMap map[string]*Host) *Consistent {
 	return &Consistent{
 		hosts:     hosts,
@@ -98,15 +95,15 @@ func NewFromExisting(hosts map[uint64]string, sortedSet []uint64, loadMap map[st
 	}
 }
 
-// ReadInternals returns the internal data structure of the consistent hash.
-func (c *Consistent) ReadInternals(reader func(map[uint64]string, []uint64, map[string]*Host, int64)) {
+// GetInternals 返回一致性哈希的内部数据
+func (c *Consistent) GetInternals() (map[uint64]string, []uint64, map[string]*Host, int64) {
 	c.RLock()
 	defer c.RUnlock()
 
-	reader(c.hosts, c.sortedSet, c.loadMap, c.totalLoad)
+	return c.hosts, c.sortedSet, c.loadMap, c.totalLoad
 }
 
-// Add adds a host with port to the table.
+// Add 添加一个主机
 func (c *Consistent) Add(host, id string, port int64) bool {
 	c.Lock()
 	defer c.Unlock()
@@ -121,7 +118,7 @@ func (c *Consistent) Add(host, id string, port int64) bool {
 		c.hosts[h] = host
 		c.sortedSet = append(c.sortedSet, h)
 	}
-	// sort hashes ascendingly
+	// 对哈希值进行升序排序
 	sort.Slice(c.sortedSet, func(i int, j int) bool {
 		return c.sortedSet[i] < c.sortedSet[j]
 	})
@@ -129,11 +126,11 @@ func (c *Consistent) Add(host, id string, port int64) bool {
 	return false
 }
 
-// Get returns the host that owns `key`.
+// Get 返回拥有“key”的主机。
 //
 // As described in https://en.wikipedia.org/wiki/Consistent_hashing
 //
-// It returns ErrNoHosts if the ring has no hosts in it.
+// 如果MAP中没有主机，则返回ErrNoHosts。
 func (c *Consistent) Get(key string) (string, error) {
 	c.RLock()
 	defer c.RUnlock()
@@ -147,13 +144,12 @@ func (c *Consistent) Get(key string) (string, error) {
 	return c.hosts[c.sortedSet[idx]], nil
 }
 
-// GetHost gets a host.
+// GetHost 获取主机
 func (c *Consistent) GetHost(key string) (*Host, error) {
 	h, err := c.Get(key)
 	if err != nil {
 		return nil, err
 	}
-
 	return c.loadMap[h], nil
 }
 
@@ -164,6 +160,7 @@ func (c *Consistent) GetHost(key string) (*Host, error) {
 // to pick the least loaded host that can serve the key
 //
 // It returns ErrNoHosts if the ring has no hosts in it.
+//
 func (c *Consistent) GetLeast(key string) (string, error) {
 	c.RLock()
 	defer c.RUnlock()
@@ -188,6 +185,7 @@ func (c *Consistent) GetLeast(key string) (string, error) {
 	}
 }
 
+// 在排序好的列表中寻找第一个>=key的值的下标
 func (c *Consistent) search(key uint64) int {
 	idx := sort.Search(len(c.sortedSet), func(i int) bool {
 		return c.sortedSet[i] >= key
@@ -237,7 +235,7 @@ func (c *Consistent) Done(host string) {
 	atomic.AddInt64(&c.totalLoad, -1)
 }
 
-// Remove deletes host from the ring.
+// Remove 移除主机
 func (c *Consistent) Remove(host string) bool {
 	c.Lock()
 	defer c.Unlock()
@@ -245,13 +243,13 @@ func (c *Consistent) Remove(host string) bool {
 	for i := 0; i < replicationFactor; i++ {
 		h := c.hash(fmt.Sprintf("%s%d", host, i))
 		delete(c.hosts, h)
-		c.delSlice(h)
+		c.delSlice(h) // 从hashSet中删除某个指定的值
 	}
 	delete(c.loadMap, host)
 	return true
 }
 
-// Hosts return the list of hosts in the ring.
+// Hosts 返回主机列表
 func (c *Consistent) Hosts() (hosts []string) {
 	c.RLock()
 	defer c.RUnlock()
@@ -315,7 +313,9 @@ func (c *Consistent) loadOK(host string) bool {
 	return false
 }
 
+// 从sortedSet删除指定值
 func (c *Consistent) delSlice(val uint64) {
+	// 为啥不使用sort.search code_debug/todo/todo.go:81
 	idx := -1
 	l := 0
 	r := len(c.sortedSet) - 1
@@ -335,12 +335,13 @@ func (c *Consistent) delSlice(val uint64) {
 	}
 }
 
+// 散列函数
 func (c *Consistent) hash(key string) uint64 {
 	out := blake2b.Sum512([]byte(key))
 	return binary.LittleEndian.Uint64(out[:])
 }
 
-// SetReplicationFactor sets the replication factor for actor placement on vnodes.
+// SetReplicationFactor 设置复制因子
 func SetReplicationFactor(factor int) {
 	replicationFactor = factor
 }

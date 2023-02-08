@@ -1,20 +1,22 @@
 package config
 
+//  pkg/runtime/config.go:19
+
 const (
-	// HostAddress is the address of the instance.
+	// HostAddress 实例地址
 	HostAddress string = "HOST_ADDRESS"
-	// DaprGRPCPort is the dapr api grpc port.
+	// DaprGRPCPort 是dapr api grpc端口。
 	DaprGRPCPort string = "DAPR_GRPC_PORT"
-	// DaprHTTPPort is the dapr api http port.
+	// DaprHTTPPort 是dapr api http端口。
 	DaprHTTPPort string = "DAPR_HTTP_PORT"
-	// DaprMetricsPort is the dapr metrics port.
+	// DaprMetricsPort   指标监控的端口
 	DaprMetricsPort string = "DAPR_METRICS_PORT"
-	// DaprProfilePort is the dapr performance profiling port.
+	// DaprProfilePort 性能分析的端口
 	DaprProfilePort string = "DAPR_PROFILE_PORT"
-	// DaprPort is the dapr internal grpc port (sidecar to sidecar).
+	// DaprPort dpar间grpc通信的端口
 	DaprPort string = "DAPR_PORT"
-	// AppPort is the port of the application, http/grpc depending on mode.
+	// AppPort 应用端口 http、grpc
 	AppPort string = "APP_PORT"
-	// AppID is the ID of the application.
+	// AppID 应用ID
 	AppID string = "APP_ID"
 )

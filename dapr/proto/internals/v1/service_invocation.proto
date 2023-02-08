@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 syntax = "proto3";
 
@@ -37,17 +29,6 @@ service ServiceInvocation {
 
   // Invokes a method of the specific service.
   rpc CallLocal (InternalInvokeRequest) returns (InternalInvokeResponse) {}
-
-  // Invokes a method of the specific service using a stream of data.
-  // Although this uses a bi-directional stream, it behaves as a "simple RPC" in which the caller sends the full request (chunked in multiple messages in the stream), then reads the full response (chunked in the stream). 
-  // Each message in the stream contains a `InternalInvokeRequestStream` (for caller) or `InternalInvokeResponseStream` (for callee):
-  // - The first message in the stream MUST contain a `request` (caller) or `response` (callee) message with all required properties present.
-  // - The first message in the stream MAY contain a `payload`, which is not required and may be empty.
-  // - Subsequent messages (any message except the first one in the stream) MUST contain a `payload` and MUST NOT contain any other property (like `request` or `response`).
-  // - Each message with a `payload` MUST contain a sequence number in `seq`, which is a counter that starts from 0 and MUST be incremented by 1 in each chunk. The `seq` counter MUST NOT be included if the message does not have a `payload`.
-  // - When the sender has completed sending the data, it MUST call `CloseSend` on the stream.
-  // The caller and callee must send at least one message in the stream. If only 1 message is sent in each direction, that message must contain both a `request`/`response` (the `payload` may be empty).
-  rpc CallLocalStream (stream InternalInvokeRequestStream) returns (stream InternalInvokeResponseStream) {}
 }
 
 // Actor represents actor using actor_type and actor_id
@@ -59,16 +40,16 @@ message Actor {
   string actor_id = 2;
 }
 
-// InternalInvokeRequest is the message to transfer caller's data to callee
-// for service invocation. This includes callee's app id and caller's request data.
+// InternalInvokeRequest
+// 是将调用者的数据传输给被调用者以进行服务调用的信息。这包括被呼叫者的应用程序ID和呼叫者的请求数据。
 message InternalInvokeRequest {
-  // Required. The version of Dapr runtime API.
+  // Required. dapr 运行时版本
   APIVersion ver = 1;
 
-  // Required. metadata holds caller's HTTP headers or gRPC metadata.
+  // Required. 调用这的元信息[http的头信息、grpc的元信息]
   map<string, ListStringValue> metadata = 2;
 
-  // Required. message including caller's invocation request.
+  // Required. 调用者的请求体
   common.v1.InvokeRequest message = 3;
 
   // Actor type and id. This field is used only for
@@ -91,26 +72,6 @@ message InternalInvokeResponse {
 
   // Callee's invocation response message.
   common.v1.InvokeResponse message = 4;
-}
-
-// InternalInvokeRequestStream is a variant of InternalInvokeRequest used in streaming RPCs.
-message InternalInvokeRequestStream {
-  // Request details.
-  // This does not contain any data in message.data.
-  InternalInvokeRequest request = 1;
-
-  // Chunk of data.
-  common.v1.StreamPayload payload = 2;
-}
-
-// InternalInvokeResponseStream is a variant of InternalInvokeResponse used in streaming RPCs.
-message InternalInvokeResponseStream {
-  // Response details.
-  // This does not contain any data in message.data.
-  InternalInvokeResponse response = 1;
-
-  // Chunk of data.
-  common.v1.StreamPayload payload = 2;
 }
 
 // ListStringValue represents string value array

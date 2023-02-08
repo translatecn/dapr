@@ -1,169 +1,107 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package runtime
 
 import (
-	"time"
-
-	"github.com/dapr/dapr/pkg/apphealth"
-	config "github.com/dapr/dapr/pkg/config/modes"
-	"github.com/dapr/dapr/pkg/credentials"
-	"github.com/dapr/dapr/pkg/modes"
+	config "github.com/dapr/dapr/pkg/config/modes" // ok
+	"github.com/dapr/dapr/pkg/credentials"         // ok
+	"github.com/dapr/dapr/pkg/modes"               // ok
 )
 
-// Protocol is a communications protocol.
+// Protocol 是一种通信协议。
 type Protocol string
 
+//pkg/config/env/env_variables.go:4
+
 const (
-	// GRPCProtocol is a gRPC communication protocol.
+	// GRPCProtocol 是一个gRPC通信协议。
 	GRPCProtocol Protocol = "grpc"
-	// HTTPProtocol is a HTTP communication protocol.
+	// HTTPProtocol 是一个http通信协议。
 	HTTPProtocol Protocol = "http"
-	// DefaultDaprHTTPPort is the default http port for Dapr.
+	// DefaultDaprHTTPPort 是Dapr的默认http端口。
 	DefaultDaprHTTPPort = 3500
-	// DefaultDaprPublicPort is the default http port for Dapr.
+	// DefaultDaprPublicPort 是Dapr的默认http端口。
 	DefaultDaprPublicPort = 3501
-	// DefaultDaprAPIGRPCPort is the default API gRPC port for Dapr.
+	// DefaultDaprAPIGRPCPort 是Dapr的默认API gRPC端口。
 	DefaultDaprAPIGRPCPort = 50001
-	// DefaultProfilePort is the default port for profiling endpoints.
+	// DefaultProfilePort 性能分析的默认端口。
 	DefaultProfilePort = 7777
-	// DefaultMetricsPort is the default port for metrics endpoints.
+	// DefaultMetricsPort 指标监控的默认端口
 	DefaultMetricsPort = 9090
-	// DefaultMaxRequestBodySize is the default option for the maximum body size in MB for Dapr HTTP servers.
+	// DefaultMaxRequestBodySize 是Dapr HTTP服务器的最大请求体大小的默认选项，单位是MB。
 	DefaultMaxRequestBodySize = 4
-	// DefaultAPIListenAddress is which address to listen for the Dapr HTTP and GRPC APIs. Empty string is all addresses.
+	// DefaultAPIListenAddress 是监听Dapr HTTP和GRPC APIs的地址。空字符串是所有地址。
 	DefaultAPIListenAddress = ""
-	// DefaultReadBufferSize is the default option for the maximum header size in KB for Dapr HTTP servers.
+	// DefaultReadBufferSize  是Dapr HTTP服务器最大header大小的默认选项，单位为KB。
 	DefaultReadBufferSize = 4
-	// DefaultGracefulShutdownDuration is the default option for the duration of the graceful shutdown.
-	DefaultGracefulShutdownDuration = time.Second * 5
-	// DefaultAppHealthCheckPath is the default path for HTTP health checks.
-	DefaultAppHealthCheckPath = "/health"
 )
 
-// Config holds the Dapr Runtime configuration.
+// Config 持有Dapr Runtime配置。
 type Config struct {
-	ID                           string
-	HTTPPort                     int
-	PublicPort                   *int
-	ProfilePort                  int
-	EnableProfiling              bool
-	APIGRPCPort                  int
-	InternalGRPCPort             int
-	ApplicationPort              int
-	APIListenAddresses           []string
-	ApplicationProtocol          Protocol
-	Mode                         modes.DaprMode
-	PlacementAddresses           []string
-	GlobalConfig                 string
-	AllowedOrigins               string
-	Standalone                   config.StandaloneConfig
-	Kubernetes                   config.KubernetesConfig
-	MaxConcurrency               int
-	mtlsEnabled                  bool
-	SentryServiceAddress         string
-	CertChain                    *credentials.CertChain
-	AppSSL                       bool
-	MaxRequestBodySize           int
-	UnixDomainSocket             string
-	ReadBufferSize               int
-	GracefulShutdownDuration     time.Duration
-	EnableAPILogging             bool
-	DisableBuiltinK8sSecretStore bool
-	AppHealthCheck               *apphealth.Config
-	AppHealthCheckHTTPPath       string
+	ID                   string // 应用ID
+	HTTPPort             int
+	PublicPort           *int
+	ProfilePort          int
+	EnableProfiling      bool
+	APIGRPCPort          int
+	InternalGRPCPort     int
+	ApplicationPort      int
+	APIListenAddresses   []string
+	ApplicationProtocol  Protocol
+	Mode                 modes.DaprMode
+	PlacementAddresses   []string
+	GlobalConfig         string
+	AllowedOrigins       string
+	Standalone           config.StandaloneConfig
+	Kubernetes           config.KubernetesConfig
+	MaxConcurrency       int
+	mtlsEnabled          bool
+	SentryServiceAddress string
+	CertChain            *credentials.CertChain
+	AppSSL               bool
+	MaxRequestBodySize   int
+	UnixDomainSocket     string
+	ReadBufferSize       int
+	StreamRequestBody    bool
 }
 
-// NewRuntimeConfigOpts contains options for NewRuntimeConfig.
-type NewRuntimeConfigOpts struct {
-	ID                           string
-	PlacementAddresses           []string
-	controlPlaneAddress          string
-	AllowedOrigins               string
-	GlobalConfig                 string
-	ComponentsPath               string
-	AppProtocol                  string
-	Mode                         string
-	HTTPPort                     int
-	InternalGRPCPort             int
-	APIGRPCPort                  int
-	APIListenAddresses           []string
-	PublicPort                   *int
-	AppPort                      int
-	ProfilePort                  int
-	EnableProfiling              bool
-	MaxConcurrency               int
-	MTLSEnabled                  bool
-	SentryAddress                string
-	AppSSL                       bool
-	MaxRequestBodySize           int
-	UnixDomainSocket             string
-	ReadBufferSize               int
-	GracefulShutdownDuration     time.Duration
-	EnableAPILogging             bool
-	DisableBuiltinK8sSecretStore bool
-	EnableAppHealthCheck         bool
-	AppHealthCheckPath           string
-	AppHealthProbeInterval       time.Duration
-	AppHealthProbeTimeout        time.Duration
-	AppHealthThreshold           int32
-}
-
-// NewRuntimeConfig returns a new runtime config.
-func NewRuntimeConfig(opts NewRuntimeConfigOpts) *Config {
-	var appHealthCheck *apphealth.Config
-	if opts.EnableAppHealthCheck {
-		appHealthCheck = &apphealth.Config{
-			ProbeInterval: opts.AppHealthProbeInterval,
-			ProbeTimeout:  opts.AppHealthProbeTimeout,
-			ProbeOnly:     true,
-			Threshold:     opts.AppHealthThreshold,
-		}
-	}
-
+// NewRuntimeConfig 返回运行时配置
+func NewRuntimeConfig(
+	id string, placementAddresses []string,
+	controlPlaneAddress, allowedOrigins, globalConfig, componentsPath, appProtocol, mode string,
+	httpPort, internalGRPCPort, apiGRPCPort int, apiListenAddresses []string, publicPort *int, appPort, profilePort int,
+	enableProfiling bool, maxConcurrency int, mtlsEnabled bool, sentryAddress string, appSSL bool, maxRequestBodySize int, unixDomainSocket string, readBufferSize int, streamRequestBody bool) *Config {
 	return &Config{
-		ID:                  opts.ID,
-		HTTPPort:            opts.HTTPPort,
-		PublicPort:          opts.PublicPort,
-		InternalGRPCPort:    opts.InternalGRPCPort,
-		APIGRPCPort:         opts.APIGRPCPort,
-		ApplicationPort:     opts.AppPort,
-		ProfilePort:         opts.ProfilePort,
-		APIListenAddresses:  opts.APIListenAddresses,
-		ApplicationProtocol: Protocol(opts.AppProtocol),
-		Mode:                modes.DaprMode(opts.Mode),
-		PlacementAddresses:  opts.PlacementAddresses,
-		GlobalConfig:        opts.GlobalConfig,
-		AllowedOrigins:      opts.AllowedOrigins,
+		ID:                  id,
+		HTTPPort:            httpPort,
+		PublicPort:          publicPort,
+		InternalGRPCPort:    internalGRPCPort,
+		APIGRPCPort:         apiGRPCPort,
+		ApplicationPort:     appPort,
+		ProfilePort:         profilePort,
+		APIListenAddresses:  apiListenAddresses,
+		ApplicationProtocol: Protocol(appProtocol),
+		Mode:                modes.DaprMode(mode),
+		PlacementAddresses:  placementAddresses,
+		GlobalConfig:        globalConfig,
+		AllowedOrigins:      allowedOrigins,
 		Standalone: config.StandaloneConfig{
-			ComponentsPath: opts.ComponentsPath,
+			ComponentsPath: componentsPath,
 		},
 		Kubernetes: config.KubernetesConfig{
-			ControlPlaneAddress: opts.controlPlaneAddress,
+			ControlPlaneAddress: controlPlaneAddress,
 		},
-		EnableProfiling:              opts.EnableProfiling,
-		MaxConcurrency:               opts.MaxConcurrency,
-		mtlsEnabled:                  opts.MTLSEnabled,
-		SentryServiceAddress:         opts.SentryAddress,
-		AppSSL:                       opts.AppSSL,
-		MaxRequestBodySize:           opts.MaxRequestBodySize,
-		UnixDomainSocket:             opts.UnixDomainSocket,
-		ReadBufferSize:               opts.ReadBufferSize,
-		GracefulShutdownDuration:     opts.GracefulShutdownDuration,
-		EnableAPILogging:             opts.EnableAPILogging,
-		DisableBuiltinK8sSecretStore: opts.DisableBuiltinK8sSecretStore,
-		AppHealthCheck:               appHealthCheck,
-		AppHealthCheckHTTPPath:       opts.AppHealthCheckPath,
+		EnableProfiling:      enableProfiling,
+		MaxConcurrency:       maxConcurrency,
+		mtlsEnabled:          mtlsEnabled,
+		SentryServiceAddress: sentryAddress,
+		AppSSL:               appSSL,
+		MaxRequestBodySize:   maxRequestBodySize,
+		UnixDomainSocket:     unixDomainSocket,
+		ReadBufferSize:       readBufferSize,
+		StreamRequestBody:    streamRequestBody,
 	}
 }

@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package raft
 
@@ -23,44 +15,39 @@ import (
 	"github.com/dapr/dapr/pkg/placement/hashing"
 )
 
-// DaprHostMember represents Dapr runtime actor host member which serve actor types.
+// DaprHostMember  宿主机成员。
 type DaprHostMember struct {
-	// Name is the unique name of Dapr runtime host.
-	Name string
-	// AppID is Dapr runtime app ID.
+	// Dapr 运行时主机
+	Name  string
 	AppID string
-	// Entities is the list of Actor Types which this Dapr runtime supports.
+	//此Dapr运行时支持的Actor类型列表。
 	Entities []string
-
-	// UpdatedAt is the last time when this host member info is updated.
+	// UpdatedAt 成员上一次更新的时间
 	UpdatedAt int64
 }
 
 type DaprHostMemberStateData struct {
-	// Index is the index number of raft log.
+	// Index raft 日志索引号
 	Index uint64
-	// Members includes Dapr runtime hosts.
-	Members map[string]*DaprHostMember
+	// Members 包括Dapr运行时主机。
+	Members map[string]*DaprHostMember // ip:port=DaprHostMember{}
 
-	// TableGeneration is the generation of hashingTableMap.
-	// This is increased whenever hashingTableMap is updated.
+	// TableGeneration  hashingTableMap 版本号
 	TableGeneration uint64
 
 	// hashingTableMap is the map for storing consistent hashing data
-	// per Actor types. This will be generated when log entries are replayed.
-	// While snapshotting the state, this member will not be saved. Instead,
-	// hashingTableMap will be recovered in snapshot recovery process.
-	hashingTableMap map[string]*hashing.Consistent
+	// hashingTableMap是用d于存储每个Actor类型的一致哈希数据的映射。当日志条目被重播时将会生成。在对状态进行快照时，
+	//不会保存该成员。相反，hashingTableMap将在快照恢复过程中恢复。
+	hashingTableMap map[string]*hashing.Consistent //  ip:port=Consistent{}
 }
 
-// DaprHostMemberState is the state to store Dapr runtime host and
-// consistent hashing tables.
+// DaprHostMemberState 存储Dapr运行时主机和一致的哈希表的状态。
 type DaprHostMemberState struct {
 	lock sync.RWMutex
-
 	data DaprHostMemberStateData
 }
 
+//
 func newDaprHostMemberState() *DaprHostMemberState {
 	return &DaprHostMemberState{
 		data: DaprHostMemberStateData{
@@ -129,7 +116,7 @@ func (s *DaprHostMemberState) clone() *DaprHostMemberState {
 	return newMembers
 }
 
-// caller should holds lock.
+// 调用者应持有锁。
 func (s *DaprHostMemberState) updateHashingTables(host *DaprHostMember) {
 	for _, e := range host.Entities {
 		if _, ok := s.data.hashingTableMap[e]; !ok {
@@ -140,7 +127,7 @@ func (s *DaprHostMemberState) updateHashingTables(host *DaprHostMember) {
 	}
 }
 
-// caller should holds lock.
+// 调用方应该持锁
 func (s *DaprHostMemberState) removeHashingTables(host *DaprHostMember) {
 	for _, e := range host.Entities {
 		if t, ok := s.data.hashingTableMap[e]; ok {
@@ -155,8 +142,7 @@ func (s *DaprHostMemberState) removeHashingTables(host *DaprHostMember) {
 	}
 }
 
-// upsertMember upserts member host info to the FSM state and returns true
-// if the hashing table update happens.
+// upsertMember 将成员主机信息上传到FSM状态，如果发生hash表更新，则返回true。
 func (s *DaprHostMemberState) upsertMember(host *DaprHostMember) bool {
 	if !s.isActorHost(host) {
 		return false
@@ -164,16 +150,15 @@ func (s *DaprHostMemberState) upsertMember(host *DaprHostMember) bool {
 
 	s.lock.Lock()
 	defer s.lock.Unlock()
-
+	// 如果存在相同的dapr主机成员，则不需要更新一致的hash表
 	if m, ok := s.data.Members[host.Name]; ok {
-		// No need to update consistent hashing table if the same dapr host member exists
+		//
 		if m.AppID == host.AppID && m.Name == host.Name && cmp.Equal(m.Entities, host.Entities) {
 			m.UpdatedAt = host.UpdatedAt
 			return false
 		}
-
-		// Remove hashing table because the existing member is invalid
-		// and needs to be updated by new member info.
+		// TODO 存在一种可能,UpdatedAt 由于某种原因时间晚
+		// 移除散列表，因为现有的成员是无效的 并需要被新的成员信息所更新。
 		s.removeHashingTables(m)
 	}
 
@@ -183,21 +168,18 @@ func (s *DaprHostMemberState) upsertMember(host *DaprHostMember) bool {
 		UpdatedAt: host.UpdatedAt,
 	}
 
-	// Update hashing table only when host reports actor types
 	s.data.Members[host.Name].Entities = make([]string, len(host.Entities))
 	copy(s.data.Members[host.Name].Entities, host.Entities)
-
+	// 将同一个key ,设置了n个副本
 	s.updateHashingTables(s.data.Members[host.Name])
 
-	// Increase hashing table generation version. Runtime will compare the table generation
-	// version with its own and then update it if it is new.
+	// 增加hash表的生成版本。运行时将把表的生成版本与自己的版本进行比较，如果是新的，就更新它。
 	s.data.TableGeneration++
 
 	return true
 }
 
-// removeMember removes members from membership and update hashing table and returns true
-// if hashing table update happens.
+// removeMember 从成员资格中删除成员，并更新hash表，如果hash表发生更新，则返回true。
 func (s *DaprHostMemberState) removeMember(host *DaprHostMember) bool {
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -213,11 +195,11 @@ func (s *DaprHostMemberState) removeMember(host *DaprHostMember) bool {
 	return false
 }
 
+// 是不是actor实例
 func (s *DaprHostMemberState) isActorHost(host *DaprHostMember) bool {
 	return len(host.Entities) > 0
 }
 
-// caller should holds lock.
 func (s *DaprHostMemberState) restoreHashingTables() {
 	if s.data.hashingTableMap == nil {
 		s.data.hashingTableMap = map[string]*hashing.Consistent{}
@@ -244,10 +226,11 @@ func (s *DaprHostMemberState) restore(r io.Reader) error {
 	return nil
 }
 
+// 将s.data 写入到w
 func (s *DaprHostMemberState) persist(w io.Writer) error {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
-
+	// 序列化消息体
 	b, err := marshalMsgPack(s.data)
 	if err != nil {
 		return err

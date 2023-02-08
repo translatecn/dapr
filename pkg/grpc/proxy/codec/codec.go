@@ -1,15 +1,11 @@
-// Based on https://github.com/trusch/grpc-proxy
-// Copyright Michal Witkowski. Licensed under Apache2 license: https://github.com/trusch/grpc-proxy/blob/master/LICENSE.txt
+// Copyright Michal Witkowski.
+// Code is based on https://github.com/trusch/grpc-proxy
 
 package codec
 
-//nolint:staticcheck
 import (
-	"fmt"
-
-	protoV1 "github.com/golang/protobuf/proto"
+	"github.com/golang/protobuf/proto"
 	"google.golang.org/grpc/encoding"
-	"google.golang.org/protobuf/proto"
 )
 
 // Name is the name by which the proxy codec is registered in the encoding codec registry
@@ -56,18 +52,10 @@ type Frame struct {
 }
 
 // ProtoMessage tags a frame as valid proto message.
-func (f *Frame) ProtoMessage() {
-	// nop
-}
-
-// Raw returns the raw message.
-// This is primarily useful for debugging.
-func (f Frame) Raw() []byte {
-	return f.payload
-}
+func (f *Frame) ProtoMessage() {}
 
 // Marshal implements the encoding.Codec interface method.
-func (p *Proxy) Marshal(v any) ([]byte, error) {
+func (p *Proxy) Marshal(v interface{}) ([]byte, error) {
 	out, ok := v.(*Frame)
 	if !ok {
 		return p.parentCodec.Marshal(v)
@@ -77,7 +65,7 @@ func (p *Proxy) Marshal(v any) ([]byte, error) {
 }
 
 // Unmarshal implements the encoding.Codec interface method.
-func (p *Proxy) Unmarshal(data []byte, v any) error {
+func (p *Proxy) Unmarshal(data []byte, v interface{}) error {
 	dst, ok := v.(*Frame)
 	if !ok {
 		return p.parentCodec.Unmarshal(data, v)
@@ -94,26 +82,12 @@ func (*Proxy) Name() string {
 // protoCodec is a Codec implementation with protobuf. It is the default rawCodec for gRPC.
 type protoCodec struct{}
 
-func (*protoCodec) Marshal(v any) ([]byte, error) {
-	switch x := v.(type) {
-	case proto.Message:
-		return proto.Marshal(x)
-	case protoV1.Message:
-		return protoV1.Marshal(x)
-	default:
-		return nil, fmt.Errorf("failed to marshal: message is %T, want proto.Message", x)
-	}
+func (*protoCodec) Marshal(v interface{}) ([]byte, error) {
+	return proto.Marshal(v.(proto.Message))
 }
 
-func (*protoCodec) Unmarshal(data []byte, v any) error {
-	switch x := v.(type) {
-	case proto.Message:
-		return proto.Unmarshal(data, x)
-	case protoV1.Message:
-		return protoV1.Unmarshal(data, x)
-	default:
-		return fmt.Errorf("failed to unmarshal: message is %T, want proto.Message", x)
-	}
+func (*protoCodec) Unmarshal(data []byte, v interface{}) error {
+	return proto.Unmarshal(data, v.(proto.Message))
 }
 
 func (*protoCodec) Name() string {

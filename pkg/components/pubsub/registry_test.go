@@ -1,28 +1,19 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package pubsub
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/dapr/components-contrib/pubsub"
 	daprt "github.com/dapr/dapr/pkg/testing"
-	"github.com/dapr/kit/logger"
 )
 
 func TestCreateFullName(t *testing.T) {
@@ -58,29 +49,29 @@ func TestCreatePubSub(t *testing.T) {
 		mockPubSubV2 := new(daprt.MockPubSub)
 
 		// act
-		testRegistry.RegisterComponent(func(_ logger.Logger) pubsub.PubSub {
+		testRegistry.Register(New(pubSubName, func() pubsub.PubSub {
 			return mockPubSub
-		}, pubSubName)
-		testRegistry.RegisterComponent(func(_ logger.Logger) pubsub.PubSub {
+		}))
+		testRegistry.Register(New(pubSubNameV2, func() pubsub.PubSub {
 			return mockPubSubV2
-		}, pubSubNameV2)
+		}))
 
 		// assert v0 and v1
-		p, e := testRegistry.Create(componentName, "v0", "")
+		p, e := testRegistry.Create(componentName, "v0")
 		assert.NoError(t, e)
 		assert.Same(t, mockPubSub, p)
 
-		p, e = testRegistry.Create(componentName, "v1", "")
+		p, e = testRegistry.Create(componentName, "v1")
 		assert.NoError(t, e)
 		assert.Same(t, mockPubSub, p)
 
 		// assert v2
-		pV2, e := testRegistry.Create(componentName, "v2", "")
+		pV2, e := testRegistry.Create(componentName, "v2")
 		assert.NoError(t, e)
 		assert.Same(t, mockPubSubV2, pV2)
 
 		// check case-insensitivity
-		pV2, e = testRegistry.Create(strings.ToUpper(componentName), "V2", "")
+		pV2, e = testRegistry.Create(strings.ToUpper(componentName), "V2")
 		assert.NoError(t, e)
 		assert.Same(t, mockPubSubV2, pV2)
 	})
@@ -89,8 +80,8 @@ func TestCreatePubSub(t *testing.T) {
 		const PubSubName = "fakePubSub"
 
 		// act
-		p, actualError := testRegistry.Create(createFullName(PubSubName), "v1", "")
-		expectedError := fmt.Errorf("couldn't find message bus %s/v1", createFullName(PubSubName))
+		p, actualError := testRegistry.Create(createFullName(PubSubName), "v1")
+		expectedError := errors.Errorf("couldn't find message bus %s/v1", createFullName(PubSubName))
 		// assert
 		assert.Nil(t, p)
 		assert.Equal(t, expectedError.Error(), actualError.Error())

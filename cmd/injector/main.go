@@ -1,117 +1,116 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package main
 
 import (
 	"flag"
-	"path/filepath"
-
-	"k8s.io/client-go/util/homedir"
-
-	"github.com/dapr/dapr/pkg/buildinfo"
+	injector_debug "github.com/dapr/dapr/code_debug/injector"
 	scheme "github.com/dapr/dapr/pkg/client/clientset/versioned"
-	"github.com/dapr/dapr/pkg/credentials"
-	"github.com/dapr/dapr/pkg/health"
+	"os"
+	"time"
+
+	"github.com/dapr/dapr/pkg/health" //ok
 	"github.com/dapr/dapr/pkg/injector"
-	"github.com/dapr/dapr/pkg/injector/monitoring"
-	"github.com/dapr/dapr/pkg/metrics"
-	"github.com/dapr/dapr/pkg/signals"
-	"github.com/dapr/dapr/utils"
-	"github.com/dapr/kit/logger"
+	"github.com/dapr/dapr/pkg/injector/monitoring" // ok
+	"github.com/dapr/dapr/pkg/metrics"             // ok
+	"github.com/dapr/dapr/pkg/signals"             //ok
+	"github.com/dapr/dapr/pkg/version"             //ok
+	"github.com/dapr/dapr/utils"                   // ok
+	"github.com/dapr/kit/logger"                   // ok
 )
 
-var (
-	log         = logger.NewLogger("dapr.injector")
-	healthzPort int
+// LIKE
+var log = logger.NewLogger("dapr.injector")
+
+const (
+	healthzPort = 8080
 )
 
 func main() {
-	log.Infof("starting Dapr Sidecar Injector -- version %s -- commit %s", buildinfo.Version(), buildinfo.Commit())
+	logger.DaprVersion = version.Version()
+	log.Info(os.Getpid())
+	log.Infof("starting Dapr Sidecar Injector -- version %s -- commit %s", version.Version(), version.Commit())
 
+	// 处理程序接收kill 信号
 	ctx := signals.Context()
-	cfg, err := injector.GetConfig()
-	if err != nil {
-		log.Fatalf("error getting config: %s", err)
-	}
+	injector_debug.PRE()
 
+	// k8s client
 	kubeClient := utils.GetKubeClient()
+	// k8s conf
 	conf := utils.GetConfig()
 	daprClient, _ := scheme.NewForConfig(conf)
-
-	healthzServer := health.NewServer(log)
+	// 判断本服务是不是活着
 	go func() {
+		healthzServer := health.NewServer(log)
+		healthzServer.Ready()
+
 		healthzErr := healthzServer.Run(ctx, healthzPort)
 		if healthzErr != nil {
 			log.Fatalf("failed to start healthz server: %s", healthzErr)
 		}
 	}()
-
-	uids, err := injector.AllowedControllersServiceAccountUID(ctx, cfg, kubeClient)
+	// 获取kube-system名称空间下各副本控制器的UUID【唯一标识】
+	uids, err := injector.AllowedControllersServiceAccountUID(ctx, kubeClient)
 	if err != nil {
 		log.Fatalf("failed to get authentication uids from services accounts: %s", err)
 	}
+	// 主要是获取TLS文件以
+	cfg, err := injector.GetConfig()
+	if err != nil {
+		log.Fatalf("error getting config: %s", err)
+	}
+	//debug
+	_, _, _ = injector.GetTrustAnchorsAndCertChain(kubeClient, "dapr")
 
-	inj := injector.NewInjector(uids, cfg, daprClient, kubeClient)
+	// in order to debug
+	injector.NewInjector(uids, cfg, daprClient, kubeClient).Run(ctx)
+	// 默认是不会走到此处的，
+	// 走到此处，说明注入程序启动失败
 
-	// Blocking call
-	inj.Run(ctx, func() {
-		healthzServer.Ready()
-	})
-
-	log.Infof("Dapr sidecar injector shut down")
+	shutdownDuration := 5 * time.Second
+	log.Infof("allowing %s for graceful shutdown to complete", shutdownDuration)
+	<-time.After(shutdownDuration)
 }
 
+// 8080 /healthz
+// 4000 注入
+// 9090 运行指标暴露
+
+//ENV
+//KUBE_CLUSTER_DOMAIN: cluster.local
+//NAMESPACE: fieldRef(v1:metadata.namespace)
+//SIDECAR_IMAGE: docker.io/daprio/daprd:1.3.0
+//SIDECAR_IMAGE_PULL_POLICY: IfNotPresent
+//TLS_CERT_FILE: /dapr/cert/tls.crt
+//TLS_KEY_FILE: /dapr/cert/tls.key
 func init() {
 	loggerOptions := logger.DefaultOptions()
+	// 这样里面的包不用依赖 flag
 	loggerOptions.AttachCmdFlags(flag.StringVar, flag.BoolVar)
 
+	// 创建普罗米修斯的指标exporter
 	metricsExporter := metrics.NewExporter(metrics.DefaultMetricNamespace)
 	metricsExporter.Options().AttachCmdFlags(flag.StringVar, flag.BoolVar)
-	var kubeconfig *string
-	if home := homedir.HomeDir(); home != "" {
-		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
-	} else {
-		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
-	}
-
-	flag.IntVar(&healthzPort, "healthz-port", 8080, "The port used for health checks")
-
-	flag.StringVar(&credentials.RootCertFilename, "issuer-ca-secret-key", credentials.RootCertFilename, "Certificate Authority certificate secret key")
-	flag.StringVar(&credentials.IssuerCertFilename, "issuer-certificate-secret-key", credentials.IssuerCertFilename, "Issuer certificate secret key")
-	flag.StringVar(&credentials.IssuerKeyFilename, "issuer-key-secret-key", credentials.IssuerKeyFilename, "Issuer private key secret key")
 
 	flag.Parse()
 
-	if err := utils.SetEnvVariables(map[string]string{
-		utils.KubeConfigVar: *kubeconfig,
-	}); err != nil {
-		log.Fatalf("error set env failed:  %s", err.Error())
-	}
-
-	// Apply options to all loggers
+	// 对全局的所有logger进行了设置
 	if err := logger.ApplyOptionsToLoggers(&loggerOptions); err != nil {
 		log.Fatal(err)
 	} else {
 		log.Infof("log level set to: %s", loggerOptions.OutputLevel)
 	}
 
-	// Initialize dapr metrics exporter
+	// 初始化dapr指标输出器
 	if err := metricsExporter.Init(); err != nil {
 		log.Fatal(err)
 	}
 
-	// Initialize injector service metrics
+	// 初始化注入器服务指标
 	if err := monitoring.InitMetrics(); err != nil {
 		log.Fatal(err)
 	}

@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package main
 
@@ -19,7 +11,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 
 	"github.com/gorilla/mux"
 )
@@ -47,28 +38,23 @@ type daprConfig struct {
 	DrainRebalancedActors   bool     `json:"drainRebalancedActors,omitempty"`
 }
 
-var registeredActorType = map[string]bool{}
+var registeredActorType = getActorType()
 
 var daprConfigResponse = daprConfig{
-	getActorType(),
+	[]string{getActorType()},
 	actorIdleTimeout,
 	actorScanInterval,
 	drainOngoingCallTimeout,
 	drainRebalancedActors,
 }
 
-func getActorType() []string {
+func getActorType() string {
 	actorType := os.Getenv(actorTypeEnvName)
 	if actorType == "" {
-		registeredActorType[defaultActorType] = true
-		return []string{defaultActorType}
+		return defaultActorType
 	}
 
-	actorTypes := strings.Split(actorType, ",")
-	for _, tp := range actorTypes {
-		registeredActorType[tp] = true
-	}
-	return actorTypes
+	return actorType
 }
 
 // indexHandler is the handler for root path
@@ -94,7 +80,7 @@ func deactivateActorHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Processing %s actor request for %s", r.Method, r.URL.RequestURI())
 	actorType := mux.Vars(r)["actorType"]
 
-	if !registeredActorType[actorType] {
+	if actorType != registeredActorType {
 		log.Printf("Unknown actor type: %s", actorType)
 		w.WriteHeader(http.StatusBadRequest)
 		return

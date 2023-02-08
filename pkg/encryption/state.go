@@ -1,22 +1,15 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package encryption
 
 import (
 	"bytes"
 	b64 "encoding/base64"
-	"fmt"
+
+	"github.com/pkg/errors"
 )
 
 var encryptedStateStores = map[string]ComponentEncryptionKeys{}
@@ -25,7 +18,7 @@ const (
 	separator = "||"
 )
 
-// AddEncryptedStateStore adds an encrypted state store and an associated encryption key to a list.
+// AddEncryptedStateStore 将一个加密的状态存储和一个相关的加密密钥添加到一个列表中。
 func AddEncryptedStateStore(storeName string, keys ComponentEncryptionKeys) bool {
 	if _, ok := encryptedStateStores[storeName]; ok {
 		return false
@@ -35,18 +28,16 @@ func AddEncryptedStateStore(storeName string, keys ComponentEncryptionKeys) bool
 	return true
 }
 
-// EncryptedStateStore returns a bool that indicates if a state stores supports encryption.
+// EncryptedStateStore 返回一个表示状态存储是否支持加密的bool。
 func EncryptedStateStore(storeName string) bool {
 	_, ok := encryptedStateStores[storeName]
 	return ok
 }
 
-// TryEncryptValue will try to encrypt a byte array if the state store has associated encryption keys.
-// The function will append the name of the key to the value for later extraction.
-// If no encryption keys exist, the function will return the bytes unmodified.
+// TryEncryptValue 将尝试对一个字节数组进行加密，如果状态存储有相关的加密密钥。该函数将把密钥的名称附加到值上，以便以后提取。如果不存在加密密钥，该函数将返回未修改的字节。
 func TryEncryptValue(storeName string, value []byte) ([]byte, error) {
 	keys := encryptedStateStores[storeName]
-	enc, err := encrypt(value, keys.Primary)
+	enc, err := encrypt(value, keys.Primary, AES256Algorithm)
 	if err != nil {
 		return value, err
 	}
@@ -55,16 +46,15 @@ func TryEncryptValue(storeName string, value []byte) ([]byte, error) {
 	return []byte(sEnc), nil
 }
 
-// TryDecryptValue will try to decrypt a byte array if the state store has associated encryption keys.
-// If no encryption keys exist, the function will return the bytes unmodified.
+// TryDecryptValue 如果状态存储有相关的加密密钥，将尝试解密一个字节数组。如果不存在加密密钥，该函数将返回未修改的字节。
 func TryDecryptValue(storeName string, value []byte) ([]byte, error) {
 	keys := encryptedStateStores[storeName]
-	// extract the decryption key that should be appended to the value
+	// 提取应附加在值上的解密密钥
 	ind := bytes.LastIndex(value, []byte(separator))
 	keyName := string(value[ind+len(separator):])
 
 	if len(keyName) == 0 {
-		return value, fmt.Errorf("could not decrypt data for state store %s: encryption key name not found on record", storeName)
+		return value, errors.Errorf("无法为状态存储解密数据 %s: 记录中没有找到加密密钥名称", storeName)
 	}
 
 	var key Key
@@ -75,5 +65,5 @@ func TryDecryptValue(storeName string, value []byte) ([]byte, error) {
 		key = keys.Secondary
 	}
 
-	return decrypt(value[:ind], key)
+	return decrypt(value[:ind], key, AES256Algorithm)
 }

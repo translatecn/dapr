@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package main
 
@@ -19,17 +11,18 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
-
-	"github.com/dapr/dapr/tests/apps/utils"
+	"time"
 
 	"github.com/gorilla/mux"
 )
 
 const (
-	appPort              = 3000
-	daprV1URL            = "http://localhost:3500/v1.0"
-	actorMethodURLFormat = daprV1URL + "/actors/%s/%s/method/%s"
+	appPort               = 3000
+	daprV1URL             = "http://localhost:3500/v1.0"
+	actorMethodURLFormat  = daprV1URL + "/actors/%s/%s/method/%s"
+	secondsToWaitInMethod = 5
 )
 
 type daprActorResponse struct {
@@ -37,7 +30,7 @@ type daprActorResponse struct {
 	Metadata map[string]string `json:"metadata"`
 }
 
-var httpClient = utils.NewHTTPClient()
+var httpClient = newHTTPClient()
 
 // indexHandler is the handler for root path
 func indexHandler(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +39,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// nolint:gosec
 func testCallActorHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Processing %s test request for %s", r.Method, r.URL.RequestURI())
 
@@ -101,7 +95,7 @@ func httpCall(method string, url string, requestBody interface{}, expectedHTTPSt
 	defer res.Body.Close()
 
 	if res.StatusCode != expectedHTTPStatusCode {
-		t := fmt.Errorf("Expected http status %d, received %d", expectedHTTPStatusCode, res.StatusCode) //nolint:stylecheck
+		t := fmt.Errorf("Expected http status %d, received %d", expectedHTTPStatusCode, res.StatusCode)
 		return nil, t
 	}
 
@@ -113,12 +107,19 @@ func httpCall(method string, url string, requestBody interface{}, expectedHTTPSt
 	return resBody, nil
 }
 
+func healthzHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(""))
+}
+
+// epoch returns the current unix epoch timestamp
+func epoch() int {
+	return (int)(time.Now().UTC().UnixNano() / 1000000)
+}
+
 // appRouter initializes restful api router
 func appRouter() *mux.Router {
 	router := mux.NewRouter().StrictSlash(true)
-
-	// Log requests and their processing time
-	router.Use(utils.LoggerMiddleware)
 
 	router.HandleFunc("/", indexHandler).Methods("GET")
 	router.HandleFunc("/test/{actorType}/{id}/method/{method}", testCallActorHandler).Methods("POST", "DELETE")
@@ -127,7 +128,23 @@ func appRouter() *mux.Router {
 	return router
 }
 
+func newHTTPClient() http.Client {
+	dialer := &net.Dialer{ //nolint:exhaustivestruct
+		Timeout: 5 * time.Second,
+	}
+	netTransport := &http.Transport{ //nolint:exhaustivestruct
+		DialContext:         dialer.DialContext,
+		TLSHandshakeTimeout: 5 * time.Second,
+	}
+
+	return http.Client{ //nolint:exhaustivestruct
+		Timeout:   30 * time.Second,
+		Transport: netTransport,
+	}
+}
+
 func main() {
 	log.Printf("Actor Client - listening on http://localhost:%d", appPort)
-	utils.StartServer(appPort, appRouter, true, false)
+
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", appPort), appRouter()))
 }

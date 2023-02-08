@@ -1,35 +1,25 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package raft
 
 import (
-	"errors"
-	"fmt"
 	"net"
 	"path/filepath"
 	"time"
 
 	"github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb"
+	"github.com/pkg/errors"
 )
 
 const (
 	logStorePrefix    = "log-"
-	snapshotsRetained = 2
+	snapshotsRetained = 2 // 快照数量
 
-	// raftLogCacheSize is the maximum number of logs to cache in-memory.
-	// This is used to reduce disk I/O for the recently committed entries.
+	// raftLogCacheSize 是要在内存中缓存的日志的最大数量。 这是用来减少最近提交的条目的磁盘I/O。
 	raftLogCacheSize = 512
 
 	commandTimeout = 1 * time.Second
@@ -38,13 +28,13 @@ const (
 	nameResolveMaxRetry      = 120
 )
 
-// PeerInfo represents raft peer node information.
+// PeerInfo 代表 "raft "每个节点信息。
 type PeerInfo struct {
 	ID      string
 	Address string
 }
 
-// Server is Raft server implementation.
+// Server raft协议的实现
 type Server struct {
 	id  string
 	fsm *FSM
@@ -65,7 +55,7 @@ type Server struct {
 	raftLogStorePath string
 }
 
-// New creates Raft server node.
+// New 创建raft服务 节点
 func New(id string, inMem bool, peers []PeerInfo, logStorePath string) *Server {
 	raftBind := raftAddressForID(id, peers)
 	if raftBind == "" {
@@ -81,9 +71,10 @@ func New(id string, inMem bool, peers []PeerInfo, logStorePath string) *Server {
 	}
 }
 
+// 尝试解析raft地址
 func tryResolveRaftAdvertiseAddr(bindAddr string) (*net.TCPAddr, error) {
-	// HACKHACK: Kubernetes POD DNS A record population takes some time
-	// to look up the address after StatefulSet POD is deployed.
+	//HACKHACK：Kubernetes POD的DNS A记录 需要等一些时间
+	// 才能在StatefulSet POD部署后需要一些时间来查询地址。
 	var err error
 	var addr *net.TCPAddr
 	for retry := 0; retry < nameResolveMaxRetry; retry++ {
@@ -96,10 +87,8 @@ func tryResolveRaftAdvertiseAddr(bindAddr string) (*net.TCPAddr, error) {
 	return nil, err
 }
 
-// StartRaft starts Raft node with Raft protocol configuration. if config is nil,
-// the default config will be used.
+// StartRaft 启动raft服务
 func (s *Server) StartRaft(config *raft.Config) error {
-	// If we have an unclean exit then attempt to close the Raft store.
 	defer func() {
 		if s.raft == nil && s.raftStore != nil {
 			if err := s.raftStore.Close(); err != nil {
@@ -125,6 +114,7 @@ func (s *Server) StartRaft(config *raft.Config) error {
 
 	// Build an all in-memory setup for dev mode, otherwise prepare a full
 	// disk-based setup.
+	// 为开发模式建立一个全内存的设置，否则准备一个基于磁盘的完整设置。
 	if s.inMem {
 		raftInmem := raft.NewInmemStore()
 		s.stableStore = raftInmem
@@ -132,32 +122,30 @@ func (s *Server) StartRaft(config *raft.Config) error {
 		s.snapStore = raft.NewInmemSnapshotStore()
 	} else {
 		if err = ensureDir(s.raftStorePath()); err != nil {
-			return fmt.Errorf("failed to create log store directory: %w", err)
+			return errors.Wrap(err, "failed to create log store directory")
 		}
-
-		// Create the backend raft store for logs and stable storage.
+		// 创建存储
 		s.raftStore, err = raftboltdb.NewBoltStore(filepath.Join(s.raftStorePath(), "raft.db"))
 		if err != nil {
 			return err
 		}
 		s.stableStore = s.raftStore
 
-		// Wrap the store in a LogCache to improve performance.
+		// 包装LogCache存储，用于提升性能
 		s.logStore, err = raft.NewLogCache(raftLogCacheSize, s.raftStore)
 		if err != nil {
 			return err
 		}
 
-		// Create the snapshot store.
+		// 创建快照存储
 		s.snapStore, err = raft.NewFileSnapshotStoreWithLogger(s.raftStorePath(), snapshotsRetained, loggerAdapter)
 		if err != nil {
 			return err
 		}
 	}
 
-	// Setup Raft configuration.
 	if config == nil {
-		// Set default configuration for raft
+		// raft默认配置
 		s.config = &raft.Config{
 			ProtocolVersion:    raft.ProtocolVersionMax,
 			HeartbeatTimeout:   1000 * time.Millisecond,
@@ -174,12 +162,11 @@ func (s *Server) StartRaft(config *raft.Config) error {
 		s.config = config
 	}
 
-	// Use LoggerAdapter to integrate with Dapr logger. Log level relies on placement log level.
+	// 使用LoggerAdapter与Dapr日志器集成。日志级别依赖于放置日志级别。
 	s.config.Logger = loggerAdapter
 	s.config.LocalID = raft.ServerID(s.id)
 
-	// If we are in bootstrap or dev mode and the state is clean then we can
-	// bootstrap now.
+	// 如果我们处于引导或开发模式，并且状态是干净的，那么我们现在就可以引导了。
 	bootstrapConf, err := s.bootstrapConfig(s.peers)
 	if err != nil {
 		return err
@@ -198,7 +185,7 @@ func (s *Server) StartRaft(config *raft.Config) error {
 		return err
 	}
 
-	logging.Infof("Raft server is starting on %s...", s.raftBind)
+	logging.Infof("Raft服务已启动 %s...", s.raftBind)
 
 	return err
 }
@@ -224,7 +211,6 @@ func (s *Server) bootstrapConfig(peers []PeerInfo) (*raft.Configuration, error) 
 		return raftConfig, nil
 	}
 
-	// return nil for raft.Configuration to use the existing log store files.
 	return nil, nil
 }
 
@@ -250,10 +236,10 @@ func (s *Server) IsLeader() bool {
 	return s.raft.State() == raft.Leader
 }
 
-// ApplyCommand applies command log to state machine to upsert or remove members.
+// ApplyCommand 将命令日志应用于状态机，以增加或删除成员。
 func (s *Server) ApplyCommand(cmdType CommandType, data DaprHostMember) (bool, error) {
 	if !s.IsLeader() {
-		return false, errors.New("this is not the leader node")
+		return false, errors.New("这不是leader节点")
 	}
 
 	cmdLog, err := makeRaftLogCommand(cmdType, data)
@@ -270,13 +256,13 @@ func (s *Server) ApplyCommand(cmdType CommandType, data DaprHostMember) (bool, e
 	return resp.(bool), nil
 }
 
-// Shutdown shutdown raft server gracefully.
+// Shutdown 优雅停止raft服务
 func (s *Server) Shutdown() {
 	if s.raft != nil {
 		s.raftTransport.Close()
 		future := s.raft.Shutdown()
 		if err := future.Error(); err != nil {
-			logging.Warnf("error shutting down raft: %v", err)
+			logging.Warnf("停止raft出错: %v", err)
 		}
 		if s.raftStore != nil {
 			s.raftStore.Close()

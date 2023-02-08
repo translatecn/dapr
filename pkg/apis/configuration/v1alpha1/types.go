@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package v1alpha1
 
@@ -36,15 +28,11 @@ type Configuration struct {
 // ConfigurationSpec is the spec for an configuration.
 type ConfigurationSpec struct {
 	// +optional
-	AppHTTPPipelineSpec PipelineSpec `json:"appHttpPipeline,omitempty"`
-	// +optional
 	HTTPPipelineSpec PipelineSpec `json:"httpPipeline,omitempty"`
 	// +optional
 	TracingSpec TracingSpec `json:"tracing,omitempty"`
 	// +kubebuilder:default={enabled:true}
 	MetricSpec MetricSpec `json:"metric,omitempty"`
-	// +kubebuilder:default={enabled:true}
-	MetricsSpec MetricSpec `json:"metrics,omitempty"`
 	// +optional
 	MTLSSpec MTLSSpec `json:"mtls,omitempty"`
 	// +optional
@@ -57,10 +45,6 @@ type ConfigurationSpec struct {
 	Features []FeatureSpec `json:"features,omitempty"`
 	// +optional
 	APISpec APISpec `json:"api,omitempty"`
-	// +optional
-	ComponentsSpec ComponentsSpec `json:"components,omitempty"`
-	// +optional
-	LoggingSpec LoggingSpec `json:"logging,omitempty"`
 }
 
 // APISpec describes the configuration for Dapr APIs.
@@ -70,9 +54,8 @@ type APISpec struct {
 
 // APIAccessRule describes an access rule for allowing a Dapr API to be enabled and accessible by an app.
 type APIAccessRule struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	// +optional
+	Name     string `json:"name"`
+	Version  string `json:"version"`
 	Protocol string `json:"protocol"`
 }
 
@@ -133,20 +116,8 @@ type SelectorField struct {
 
 // TracingSpec defines distributed tracing configuration.
 type TracingSpec struct {
-	SamplingRate string `json:"samplingRate"`
-	// +optional
-	Stdout bool `json:"stdout"`
-	// +optional
-	Zipkin ZipkinSpec `json:"zipkin"`
-	// +optional
-	Otel OtelSpec `json:"otel"`
-}
-
-// OtelSpec defines Otel exporter configurations.
-type OtelSpec struct {
-	Protocol        string `json:"protocol" yaml:"protocol"`
-	EndpointAddress string `json:"endpointAddress" yaml:"endpointAddress"`
-	IsSecure        bool   `json:"isSecure" yaml:"isSecure"`
+	SamplingRate string     `json:"samplingRate"`
+	Zipkin       ZipkinSpec `json:"zipkin"`
 }
 
 // ZipkinSpec defines Zipkin trace configurations.
@@ -157,20 +128,6 @@ type ZipkinSpec struct {
 // MetricSpec defines metrics configuration.
 type MetricSpec struct {
 	Enabled bool `json:"enabled"`
-	// +optional
-	Rules []MetricsRule `json:"rules"`
-}
-
-// MetricsRule defines configuration options for a metric.
-type MetricsRule struct {
-	Name   string        `json:"name"`
-	Labels []MetricLabel `json:"labels"`
-}
-
-// MetricsLabel defines an object that allows to set regex expressions for a label.
-type MetricLabel struct {
-	Name  string            `json:"name"`
-	Regex map[string]string `json:"regex"`
 }
 
 // AppPolicySpec defines the policy data structure for each app.
@@ -210,40 +167,14 @@ type FeatureSpec struct {
 	Enabled bool   `json:"enabled" yaml:"enabled"`
 }
 
-// ComponentsSpec describes the configuration for Dapr components
-type ComponentsSpec struct {
-	// Denylist of component types that cannot be instantiated
-	// +optional
-	Deny []string `json:"deny,omitempty" yaml:"deny,omitempty"`
-}
-
 // +kubebuilder:object:root=true
 
-// ConfigurationList is a list of Dapr event sources.
+// ConfigurationList dapr事件列表
 type ConfigurationList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata"`
 
 	Items []Configuration `json:"items"`
-}
-
-// LoggingSpec defines the configuration for logging.
-type LoggingSpec struct {
-	// Configure API logging.
-	// +optional
-	APILogging APILoggingSpec `json:"apiLogging" yaml:"apiLogging"`
-}
-
-// APILoggingSpec defines the configuration for API logging.
-type APILoggingSpec struct {
-	// Default value for enabling API logging. Sidecars can always override this by setting `--enable-api-logging` to true or false explicitly.
-	// The default value is false.
-	// +optional
-	Enabled bool `json:"enabled" yaml:"enabled"`
-	// If true, health checks are not reported in API logs. Default: false.
-	// This option has no effect if API logging is disabled.
-	// +optional
-	OmitHealthChecks bool `json:"omitHealthChecks" yaml:"omitHealthChecks"`
 }
 
 // DynamicValue is a dynamic value struct for the component.metadata pair value.

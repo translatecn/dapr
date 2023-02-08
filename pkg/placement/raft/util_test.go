@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package raft
 
@@ -22,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+//OK
 func TestEnsureDir(t *testing.T) {
 	testDir := "_testDir"
 	t.Run("create dir successfully", func(t *testing.T) {
@@ -32,7 +25,7 @@ func TestEnsureDir(t *testing.T) {
 	})
 
 	t.Run("ensure the existing directory", func(t *testing.T) {
-		err := os.Mkdir(testDir, 0o700)
+		err := os.Mkdir(testDir, 0700)
 		assert.NoError(t, err)
 		err = ensureDir(testDir)
 		assert.NoError(t, err)
@@ -52,6 +45,7 @@ func TestEnsureDir(t *testing.T) {
 	})
 }
 
+//OK
 func TestRaftAddressForID(t *testing.T) {
 	raftAddressTests := []struct {
 		in  []PeerInfo
@@ -81,6 +75,7 @@ func TestRaftAddressForID(t *testing.T) {
 	}
 }
 
+//OK
 func TestMarshalAndUnmarshalMsgpack(t *testing.T) {
 	type testStruct struct {
 		Name            string
@@ -108,6 +103,7 @@ func TestMarshalAndUnmarshalMsgpack(t *testing.T) {
 	assert.Nil(t, decoded.notSerialized)
 }
 
+//OK
 func TestMakeRaftLogCommand(t *testing.T) {
 	// arrange
 	testMember := DaprHostMember{

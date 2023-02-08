@@ -1,17 +1,8 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
-//nolint:forbidigo
 package runtime
 
 import (
@@ -22,11 +13,13 @@ import (
 )
 
 var (
-	timeoutSeconds       = 60
-	requestTimeoutMillis = 500
-	periodMillis         = 100
-	urlFormat            = "http://localhost:%s/v1.0/healthz/outbound"
+	timeoutSeconds       int    = 60
+	requestTimeoutMillis int    = 500
+	periodMillis         int    = 100
+	urlFormat            string = "http://localhost:%s/v1.0/healthz/outbound"
 )
+//http://localhost:3500/v1.0/healthz/outbound
+//dapr <----> dapr <----> app
 
 func waitUntilDaprOutboundReady(daprHTTPPort string) {
 	outboundReadyHealthURL := fmt.Sprintf(urlFormat, daprHTTPPort)
@@ -36,21 +29,24 @@ func waitUntilDaprOutboundReady(daprHTTPPort string) {
 	println(fmt.Sprintf("Waiting for Dapr to be outbound ready (timeout: %d seconds): url=%s\n", timeoutSeconds, outboundReadyHealthURL))
 
 	var err error
+	//到期时间
 	timeoutAt := time.Now().Add(time.Duration(timeoutSeconds) * time.Second)
+	// 上一次打印错误的时间
 	lastPrintErrorTime := time.Now()
 	for time.Now().Before(timeoutAt) {
 		err = checkIfOutboundReady(client, outboundReadyHealthURL)
 		if err == nil {
+			// 成功以http://localhost:3500/v1.0/healthz/outbound 请求 返回204状态码
 			println("Dapr is outbound ready!")
 			return
 		}
 
 		if time.Now().After(lastPrintErrorTime) {
-			// print the error once in one seconds to avoid too many errors
+			// 在一秒钟内打印一次错误，以避免过多的错误。
 			lastPrintErrorTime = time.Now().Add(time.Second)
 			println(fmt.Sprintf("Dapr outbound NOT ready yet: %v", err))
 		}
-
+		// 0.1 秒
 		time.Sleep(time.Duration(periodMillis) * time.Millisecond)
 	}
 
@@ -72,7 +68,7 @@ func checkIfOutboundReady(client *http.Client, outboundReadyHealthURL string) er
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode != http.StatusNoContent {
+	if resp.StatusCode != 204 {
 		return fmt.Errorf("HTTP status code %v", resp.StatusCode)
 	}
 

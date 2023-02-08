@@ -1,102 +1,96 @@
 package runtime
 
 import (
-	bindingsLoader "github.com/dapr/dapr/pkg/components/bindings"
-	configurationLoader "github.com/dapr/dapr/pkg/components/configuration"
-	lockLoader "github.com/dapr/dapr/pkg/components/lock"
-	httpMiddlewareLoader "github.com/dapr/dapr/pkg/components/middleware/http"
-	nrLoader "github.com/dapr/dapr/pkg/components/nameresolution"
-	pubsubLoader "github.com/dapr/dapr/pkg/components/pubsub"
-	secretstoresLoader "github.com/dapr/dapr/pkg/components/secretstores"
-	stateLoader "github.com/dapr/dapr/pkg/components/state"
-	workflowsLoader "github.com/dapr/dapr/pkg/components/workflows"
+	"github.com/dapr/dapr/pkg/components/bindings"        // 规定了 InputBinding 、OutputBinding 需要传递哪些配置 [名字、构造方法]
+	"github.com/dapr/dapr/pkg/components/configuration"   // 规定了 Configuration  需要传递哪些配置
+	"github.com/dapr/dapr/pkg/components/middleware/http" // 规定了 Middleware 需要传递哪些配置
+	"github.com/dapr/dapr/pkg/components/nameresolution"  // 规定了 NameResolution 需要传递哪些配置
+	"github.com/dapr/dapr/pkg/components/pubsub"          // 规定了 PubSub 需要传递哪些配置
+	"github.com/dapr/dapr/pkg/components/secretstores"    // 规定了 SecretStore 需要传递哪些配置
+	"github.com/dapr/dapr/pkg/components/state"           // 规定了 State 需要传递哪些配置
 )
 
 type (
-	// runtimeOpts encapsulates the components to include in the runtime.
+	// runtimeOpts  封装了要包含在运行时中的组件。
 	runtimeOpts struct {
-		secretStoreRegistry       *secretstoresLoader.Registry
-		stateRegistry             *stateLoader.Registry
-		configurationRegistry     *configurationLoader.Registry
-		lockRegistry              *lockLoader.Registry
-		pubsubRegistry            *pubsubLoader.Registry
-		nameResolutionRegistry    *nrLoader.Registry
-		bindingRegistry           *bindingsLoader.Registry
-		httpMiddlewareRegistry    *httpMiddlewareLoader.Registry
-		workflowComponentRegistry *workflowsLoader.Registry
-		componentsCallback        ComponentsCallback
+		secretStores    []secretstores.SecretStore
+		states          []state.State
+		configurations  []configuration.Configuration
+		pubsubs         []pubsub.PubSub
+		nameResolutions []nameresolution.NameResolution
+		inputBindings   []bindings.InputBinding
+		outputBindings  []bindings.OutputBinding
+		httpMiddleware  []http.Middleware
+
+		componentsCallback ComponentsCallback
 	}
 
-	// Option is a function that customizes the runtime.
+	// Option 扩展 运行时各个组件的 功能
+	//is a function that customizes the runtime.
 	Option func(o *runtimeOpts)
 )
 
-// WithSecretStores adds secret store components to the runtime.
-func WithSecretStores(registry *secretstoresLoader.Registry) Option {
+// WithSecretStores 向runtime添加秘钥存储组件
+func WithSecretStores(secretStores ...secretstores.SecretStore) Option {
 	return func(o *runtimeOpts) {
-		o.secretStoreRegistry = registry
+		o.secretStores = append(o.secretStores, secretStores...)
 	}
 }
 
-// WithStates adds state store components to the runtime.
-func WithStates(registry *stateLoader.Registry) Option {
+// WithStates 向runtime添加状态存储组件
+func WithStates(states ...state.State) Option {
 	return func(o *runtimeOpts) {
-		o.stateRegistry = registry
+		o.states = append(o.states, states...)
 	}
 }
 
-// WithConfigurations adds configuration store components to the runtime.
-func WithConfigurations(registry *configurationLoader.Registry) Option {
+// WithConfigurations 向runtime添加配置存储组件
+func WithConfigurations(configurations ...configuration.Configuration) Option {
 	return func(o *runtimeOpts) {
-		o.configurationRegistry = registry
+		o.configurations = append(o.configurations, configurations...)
 	}
 }
 
-// WithLocks add lock store components to the runtime.
-func WithLocks(registry *lockLoader.Registry) Option {
+// WithPubSubs 向runtime添加发布订阅组件
+func WithPubSubs(pubsubs ...pubsub.PubSub) Option {
 	return func(o *runtimeOpts) {
-		o.lockRegistry = registry
+		o.pubsubs = append(o.pubsubs, pubsubs...)
 	}
 }
 
-// WithPubSubs adds pubsub store components to the runtime.
-func WithPubSubs(registry *pubsubLoader.Registry) Option {
+// WithNameResolutions 添加名称解析组件
+func WithNameResolutions(nameResolutions ...nameresolution.NameResolution) Option {
 	return func(o *runtimeOpts) {
-		o.pubsubRegistry = registry
+		o.nameResolutions = append(o.nameResolutions, nameResolutions...)
 	}
 }
 
-// WithNameResolutions adds name resolution components to the runtime.
-func WithNameResolutions(registry *nrLoader.Registry) Option {
+// WithInputBindings 添加获取消息的 组件 [可以理解为消费者]
+func WithInputBindings(inputBindings ...bindings.InputBinding) Option {
 	return func(o *runtimeOpts) {
-		o.nameResolutionRegistry = registry
+		o.inputBindings = append(o.inputBindings, inputBindings...)
 	}
 }
 
-// WithBindings adds binding components to the runtime.
-func WithBindings(registry *bindingsLoader.Registry) Option {
+// WithOutputBindings 添加发布消息的组件 [可以理解为生产者]
+func WithOutputBindings(outputBindings ...bindings.OutputBinding) Option {
 	return func(o *runtimeOpts) {
-		o.bindingRegistry = registry
+		o.outputBindings = append(o.outputBindings, outputBindings...)
 	}
 }
 
-// WithHTTPMiddlewares adds HTTP middleware components to the runtime.
-func WithHTTPMiddlewares(registry *httpMiddlewareLoader.Registry) Option {
+// WithHTTPMiddleware 向runtime添加中间件
+func WithHTTPMiddleware(httpMiddleware ...http.Middleware) Option {
 	return func(o *runtimeOpts) {
-		o.httpMiddlewareRegistry = registry
+		o.httpMiddleware = append(o.httpMiddleware, httpMiddleware...)
 	}
 }
 
-// WithWorkflowComponents adds workflow components to the runtime.
-func WithWorkflowComponents(registry *workflowsLoader.Registry) Option {
-	return func(o *runtimeOpts) {
-		o.workflowComponentRegistry = registry
-	}
-}
-
-// WithComponentsCallback sets the components callback for applications that embed Dapr.
+// WithComponentsCallback 为嵌入Dapr的应用程序设置组件回调。  没有找到调用的地方
 func WithComponentsCallback(componentsCallback ComponentsCallback) Option {
 	return func(o *runtimeOpts) {
+		//func(components ComponentRegistry) error
+		// 会把当前所有注册的组件传递进去
 		o.componentsCallback = componentsCallback
 	}
 }

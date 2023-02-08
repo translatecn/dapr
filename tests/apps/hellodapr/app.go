@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package main
 
@@ -19,22 +11,12 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/gorilla/mux"
-
-	"github.com/dapr/dapr/tests/apps/utils"
 )
 
-var appPort = 3000
-
-func init() {
-	p := os.Getenv("PORT")
-	if p != "" && p != "0" {
-		appPort, _ = strconv.Atoi(p)
-	}
-}
+const appPort = 3000
 
 type testCommandRequest struct {
 	Message string `json:"message,omitempty"`
@@ -115,15 +97,12 @@ func envTest(commandRequest testCommandRequest) (int, appResponse) {
 
 // epoch returns the current unix epoch timestamp
 func epoch() int {
-	return int(time.Now().UnixMilli())
+	return (int)(time.Now().UTC().UnixNano() / 1000000)
 }
 
 // appRouter initializes restful api router
 func appRouter() *mux.Router {
 	router := mux.NewRouter().StrictSlash(true)
-
-	// Log requests and their processing time
-	router.Use(utils.LoggerMiddleware)
 
 	router.HandleFunc("/", indexHandler).Methods("GET")
 	router.HandleFunc("/tests/{test}", testHandler).Methods("POST")
@@ -135,5 +114,6 @@ func appRouter() *mux.Router {
 
 func main() {
 	log.Printf("Hello Dapr - listening on http://localhost:%d", appPort)
-	utils.StartServer(appPort, appRouter, true, false)
+
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", appPort), appRouter()))
 }

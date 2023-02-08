@@ -1,45 +1,33 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package grpc
 
 import (
-	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"sync"
 	"time"
 
-	grpcMiddleware "github.com/grpc-ecosystem/go-grpc-middleware"
-	grpcGo "google.golang.org/grpc"
+	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
+	"github.com/pkg/errors"
+	grpc_go "google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 
+	"github.com/dapr/kit/logger"
+
 	"github.com/dapr/dapr/pkg/config"
 	diag "github.com/dapr/dapr/pkg/diagnostics"
-	diagUtils "github.com/dapr/dapr/pkg/diagnostics/utils"
-	"github.com/dapr/dapr/pkg/grpc/metadata"
+	diag_utils "github.com/dapr/dapr/pkg/diagnostics/utils"
 	"github.com/dapr/dapr/pkg/messaging"
 	internalv1pb "github.com/dapr/dapr/pkg/proto/internals/v1"
 	runtimev1pb "github.com/dapr/dapr/pkg/proto/runtime/v1"
 	auth "github.com/dapr/dapr/pkg/runtime/security"
-	authConsts "github.com/dapr/dapr/pkg/runtime/security/consts"
-	"github.com/dapr/dapr/pkg/runtime/wfengine"
-	"github.com/dapr/kit/logger"
 )
 
 const (
@@ -50,7 +38,7 @@ const (
 	defaultMaxConnectionAgeSeconds = 30
 )
 
-// Server is an interface for the dapr gRPC server.
+// Server dapr grpc 服务器接口
 type Server interface {
 	io.Closer
 	StartNonBlocking() error
@@ -62,46 +50,40 @@ type server struct {
 	tracingSpec        config.TracingSpec
 	metricSpec         config.MetricSpec
 	authenticator      auth.Authenticator
-	servers            []*grpcGo.Server
+	servers            []*grpc_go.Server
 	renewMutex         *sync.Mutex
 	signedCert         *auth.SignedCertificate
 	tlsCert            tls.Certificate
-	signedCertDuration time.Duration
+	signedCertDuration time.Duration // 证书有效期
 	kind               string
 	logger             logger.Logger
-	infoLogger         logger.Logger
 	maxConnectionAge   *time.Duration
 	authToken          string
 	apiSpec            config.APISpec
 	proxy              messaging.Proxy
-	workflowEngine     *wfengine.WorkflowEngine
 }
 
 var (
 	apiServerLogger      = logger.NewLogger("dapr.runtime.grpc.api")
-	apiServerInfoLogger  = logger.NewLogger("dapr.runtime.grpc.api-info")
 	internalServerLogger = logger.NewLogger("dapr.runtime.grpc.internal")
 )
 
-// NewAPIServer returns a new user facing gRPC API server.
-func NewAPIServer(api API, config ServerConfig, tracingSpec config.TracingSpec, metricSpec config.MetricSpec, apiSpec config.APISpec, proxy messaging.Proxy, workflowEngine *wfengine.WorkflowEngine) Server {
-	apiServerInfoLogger.SetOutputLevel(logger.LogLevel("info"))
+// NewAPIServer 返回一个新的面向用户的gRPC API服务器。
+func NewAPIServer(api API, config ServerConfig, tracingSpec config.TracingSpec, metricSpec config.MetricSpec, apiSpec config.APISpec, proxy messaging.Proxy) Server {
 	return &server{
-		api:            api,
-		config:         config,
-		tracingSpec:    tracingSpec,
-		metricSpec:     metricSpec,
-		kind:           apiServer,
-		logger:         apiServerLogger,
-		infoLogger:     apiServerInfoLogger,
-		authToken:      auth.GetAPIToken(),
-		apiSpec:        apiSpec,
-		proxy:          proxy,
-		workflowEngine: workflowEngine,
+		api:         api,
+		config:      config,
+		tracingSpec: tracingSpec,
+		metricSpec:  metricSpec,
+		kind:        apiServer,
+		logger:      apiServerLogger,
+		authToken:   auth.GetAPIToken(),
+		apiSpec:     apiSpec,
+		proxy:       proxy,
 	}
 }
 
-// NewInternalServer returns a new gRPC server for Dapr to Dapr communications.
+// NewInternalServer 返回一个dapr间通信的grpc服务端
 func NewInternalServer(api API, config ServerConfig, tracingSpec config.TracingSpec, metricSpec config.MetricSpec, authenticator auth.Authenticator, proxy messaging.Proxy) Server {
 	return &server{
 		api:              api,
@@ -118,11 +100,11 @@ func NewInternalServer(api API, config ServerConfig, tracingSpec config.TracingS
 }
 
 func getDefaultMaxAgeDuration() *time.Duration {
-	d := time.Second * defaultMaxConnectionAgeSeconds
+	d := time.Second * defaultMaxConnectionAgeSeconds // 30秒
 	return &d
 }
 
-// StartNonBlocking starts a new server in a goroutine.
+// StartNonBlocking 在goroutine里启动服务
 func (s *server) StartNonBlocking() error {
 	var listeners []net.Listener
 	if s.config.UnixDomainSocket != "" && s.kind == apiServer {
@@ -131,44 +113,47 @@ func (s *server) StartNonBlocking() error {
 		if err != nil {
 			return err
 		}
-		s.logger.Infof("gRPC server listening on UNIX socket: %s", socket)
 		listeners = append(listeners, l)
 	} else {
+		// 在多个ip上同时监听某个port
 		for _, apiListenAddress := range s.config.APIListenAddresses {
-			addr := apiListenAddress + ":" + strconv.Itoa(s.config.Port)
-			l, err := net.Listen("tcp", addr)
+			l, err := net.Listen("tcp", fmt.Sprintf("%s:%v", apiListenAddress, s.config.Port))
 			if err != nil {
-				s.logger.Debugf("Failed to listen for gRPC server on TCP address %s with error: %v", addr, err)
+				s.logger.Warnf("Failed to listen on %v:%v with error: %v", apiListenAddress, s.config.Port, err)
 			} else {
-				s.logger.Infof("gRPC server listening on TCP address: %s", addr)
 				listeners = append(listeners, l)
 			}
 		}
 	}
 
 	if len(listeners) == 0 {
-		return errors.New("could not listen on any endpoint")
+		return errors.Errorf("could not listen on any endpoint")
 	}
 
 	for _, listener := range listeners {
-		// server is created in a loop because each instance
-		// has a handle on the underlying listener.
+
+		// 服务器是在一个循环中创建的，因为每个实例 都有一个底层监听器的句柄。
+		// 通过官方的grpc创建服务实例
 		server, err := s.getGRPCServer()
 		if err != nil {
 			return err
 		}
 		s.servers = append(s.servers, server)
 
+		// dapr间通信
 		if s.kind == internalServer {
+			// 注册服务调用服务的 结构体实现
+			// 将数据信息封装到了 pkg/proto/internals/v1/service_invocation.pb.go:94
+			// 这个结构体里
+			// 功能抽象.注册(grpc服务,功能实现)
 			internalv1pb.RegisterServiceInvocationServer(server, s.api)
+			// app 和 daprd之间通信
 		} else if s.kind == apiServer {
+			// 功能抽象.注册(grpc服务,功能实现)
 			runtimev1pb.RegisterDaprServer(server, s.api)
-			if s.workflowEngine != nil {
-				s.workflowEngine.ConfigureGrpc(server)
-			}
 		}
 
-		go func(server *grpcGo.Server, l net.Listener) {
+		go func(server *grpc_go.Server, l net.Listener) {
 			if err := server.Serve(l); err != nil {
 				s.logger.Fatalf("gRPC serve error: %v", err)
 			}
@@ -183,39 +168,36 @@ func (s *server) Close() error {
 		server.GracefulStop()
 	}
 
-	if s.api != nil {
-		if closer, ok := s.api.(io.Closer); ok {
-			closer.Close()
-		}
-	}
-
 	return nil
 }
 
 func (s *server) generateWorkloadCert() error {
-	s.logger.Info("sending workload csr request to sentry")
+	//kubectl port-forward svc/dapr-api -n dapr-system 6500:80 &
+
+	s.logger.Info("向Sentry发送工作负荷CSR请求")
+	// 发送签名申请，获得证书
 	signedCert, err := s.authenticator.CreateSignedWorkloadCert(s.config.AppID, s.config.NameSpace, s.config.TrustDomain)
 	if err != nil {
-		return fmt.Errorf("error from authenticator CreateSignedWorkloadCert: %w", err)
+		return errors.Wrap(err, "来自认证器CreateSignedWorkloadCert的错误")
 	}
-	s.logger.Info("certificate signed successfully")
+	s.logger.Info("证书签名 successfully")
 
 	tlsCert, err := tls.X509KeyPair(signedCert.WorkloadCert, signedCert.PrivateKeyPem)
 	if err != nil {
-		return fmt.Errorf("error creating x509 Key Pair: %w", err)
+		return errors.Wrap(err, "error 创建 x509 秘钥对")
 	}
 
 	s.signedCert = signedCert
 	s.tlsCert = tlsCert
-	s.signedCertDuration = signedCert.Expiry.Sub(time.Now().UTC())
+	s.signedCertDuration = signedCert.Expiry.Sub(time.Now().UTC()) // 证书有效期
 	return nil
 }
 
-func (s *server) getMiddlewareOptions() []grpcGo.ServerOption {
-	intr := make([]grpcGo.UnaryServerInterceptor, 0, 6)
-	intrStream := make([]grpcGo.StreamServerInterceptor, 0, 3)
-
-	intr = append(intr, metadata.SetMetadataInContextUnary)
+// 获取dapr之间 通信时需要的中间件
+func (s *server) getMiddlewareOptions() []grpc_go.ServerOption {
+	opts := []grpc_go.ServerOption{}
+	intr := []grpc_go.UnaryServerInterceptor{}
+	intrStream := []grpc_go.StreamServerInterceptor{}
 
 	if len(s.apiSpec.Allowed) > 0 {
 		s.logger.Info("enabled API access list on gRPC server")
@@ -224,79 +206,90 @@ func (s *server) getMiddlewareOptions() []grpcGo.ServerOption {
 
 	if s.authToken != "" {
 		s.logger.Info("enabled token authentication on gRPC server")
-		intr = append(intr, setAPIAuthenticationMiddlewareUnary(s.authToken, authConsts.APITokenHeader))
+		intr = append(intr, setAPIAuthenticationMiddlewareUnary(s.authToken, auth.APITokenHeader))
 	}
-
-	if diagUtils.IsTracingEnabled(s.tracingSpec.SamplingRate) {
+	// todo
+	if diag_utils.IsTracingEnabled(s.tracingSpec.SamplingRate) {
 		s.logger.Info("enabled gRPC tracing middleware")
 		intr = append(intr, diag.GRPCTraceUnaryServerInterceptor(s.config.AppID, s.tracingSpec))
-		intrStream = append(intrStream, diag.GRPCTraceStreamServerInterceptor(s.config.AppID, s.tracingSpec))
+
+		if s.proxy != nil {
+			intrStream = append(intrStream, diag.GRPCTraceStreamServerInterceptor(s.config.AppID, s.tracingSpec))
+		}
 	}
 
 	if s.metricSpec.Enabled {
 		s.logger.Info("enabled gRPC metrics middleware")
 		intr = append(intr, diag.DefaultGRPCMonitoring.UnaryServerInterceptor())
-
-		if s.kind == apiServer {
-			intrStream = append(intrStream, diag.DefaultGRPCMonitoring.StreamingServerInterceptor())
-		} else if s.kind == internalServer {
-			intrStream = append(intrStream, diag.DefaultGRPCMonitoring.StreamingClientInterceptor())
-		}
 	}
 
-	if s.config.EnableAPILogging && s.infoLogger != nil {
-		intr = append(intr, s.getGRPCAPILoggingInfo())
+	chain := grpc_middleware.ChainUnaryServer(
+		intr...,
+	)
+	opts = append(
+		opts,
+		grpc_go.UnaryInterceptor(chain),
+	)
+
+	if s.proxy != nil {
+		chainStream := grpc_middleware.ChainStreamServer(
+			intrStream...,
+		)
+
+		opts = append(opts, grpc_go.StreamInterceptor(chainStream))
 	}
 
-	return []grpcGo.ServerOption{
-		grpcGo.UnaryInterceptor(grpcMiddleware.ChainUnaryServer(intr...)),
-		grpcGo.StreamInterceptor(grpcMiddleware.ChainStreamServer(intrStream...)),
-		grpcGo.InTapHandle(metadata.SetMetadataInTapHandle),
-	}
+	return opts
 }
 
-func (s *server) getGRPCServer() (*grpcGo.Server, error) {
+// 将一些配置，应用到链接上
+func (s *server) getGRPCServer() (*grpc_go.Server, error) {
 	opts := s.getMiddlewareOptions()
+	// 超时时间
 	if s.maxConnectionAge != nil {
-		opts = append(opts, grpcGo.KeepaliveParams(keepalive.ServerParameters{MaxConnectionAge: *s.maxConnectionAge}))
+		opts = append(opts, grpc_go.KeepaliveParams(keepalive.ServerParameters{MaxConnectionAge: *s.maxConnectionAge}))
 	}
-
+	// 验证器
 	if s.authenticator != nil {
 		err := s.generateWorkloadCert()
 		if err != nil {
 			return nil, err
 		}
 
-		//nolint:gosec
+		// nolint:gosec
 		tlsConfig := tls.Config{
-			ClientCAs:  s.signedCert.TrustChain,
-			ClientAuth: tls.RequireAndVerifyClientCert,
+			ClientCAs:  s.signedCert.TrustChain, // 证书池
+			ClientAuth: tls.RequireAndVerifyClientCert,// 对客户端证书进行校验
 			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-				return &s.tlsCert, nil
+				return &s.tlsCert, nil // 返回当前使用的证书、秘钥
 			},
 		}
 		ta := credentials.NewTLS(&tlsConfig)
 
-		opts = append(opts, grpcGo.Creds(ta))
+		opts = append(opts, grpc_go.Creds(ta))
 		go s.startWorkloadCertRotation()
 	}
 
 	opts = append(opts,
-		grpcGo.MaxRecvMsgSize(s.config.MaxRequestBodySizeMB<<20),
-		grpcGo.MaxSendMsgSize(s.config.MaxRequestBodySizeMB<<20),
-		grpcGo.MaxHeaderListSize(uint32(s.config.ReadBufferSizeKB<<10)),
+		grpc_go.MaxRecvMsgSize(s.config.MaxRequestBodySize*1024*1024),   // 最大可接收的消息量
+		grpc_go.MaxSendMsgSize(s.config.MaxRequestBodySize*1024*1024),   // 最大可发送的消息量
+		grpc_go.MaxHeaderListSize(uint32(s.config.ReadBufferSize*1024)), // 最大的header信息大小
 	)
 
 	if s.proxy != nil {
-		opts = append(opts, grpcGo.UnknownServiceHandler(s.proxy.Handler()))
+		//返回一个ServerOption，允许添加一个自定义的未知服务处理器。所提供的方法是一个双流RPC服务处理程序。
+		//处理程序，当收到对未注册的服务或方法的请求时，它将被调用而不是返回 "未实现 "的 gRPC 错误。处理程序和流拦截器（如果设置）可以完全访问ServerStream，包括它的Context。
+		opts = append(opts, grpc_go.UnknownServiceHandler(s.proxy.Handler()))
 	}
 
-	return grpcGo.NewServer(opts...), nil
+	return grpc_go.NewServer(opts...), nil
 }
 
 func (s *server) startWorkloadCertRotation() {
-	s.logger.Infof("starting workload cert expiry watcher. current cert expires on: %s", s.signedCert.Expiry.String())
-
+	s.logger.Infof("启动证书过期监视器，当前证书的过期时间: %s", s.signedCert.Expiry.String())
+	// 每隔3秒判断一次
+	//	allowedClockSkew = time.Minute * 10 时钟偏移
+	//	workloadCertTTL = time.Hour * 10  证书的有效期 + allowedClockSkew
 	ticker := time.NewTicker(certWatchInterval)
 
 	for range ticker.C {
@@ -308,36 +301,19 @@ func (s *server) startWorkloadCertRotation() {
 			err := s.generateWorkloadCert()
 			if err != nil {
 				s.logger.Errorf("error starting server: %s", err)
-				s.renewMutex.Unlock()
-				continue
 			}
 			diag.DefaultMonitoring.MTLSWorkLoadCertRotationCompleted()
 		}
 		s.renewMutex.Unlock()
 	}
 }
-
+// 是不是应该刷新证书
 func shouldRenewCert(certExpiryDate time.Time, certDuration time.Duration) bool {
-	expiresIn := certExpiryDate.Sub(time.Now())
-	expiresInSeconds := expiresIn.Seconds()
+	expiresIn := certExpiryDate.Sub(time.Now().UTC())
+	expiresInSeconds := expiresIn.Seconds() // 证书剩余有效秒数
 	certDurationSeconds := certDuration.Seconds()
-
+	// 经过了证书有效期的70%就刷新证书
+	// 重新签名
 	percentagePassed := 100 - ((expiresInSeconds / certDurationSeconds) * 100)
 	return percentagePassed >= renewWhenPercentagePassed
-}
-
-func (s *server) getGRPCAPILoggingInfo() grpcGo.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, info *grpcGo.UnaryServerInfo, handler grpcGo.UnaryHandler) (interface{}, error) {
-		if s.infoLogger != nil && info != nil {
-			fields := make(map[string]any, 2)
-			fields["method"] = info.FullMethod
-			if meta, ok := metadata.FromIncomingContext(ctx); ok {
-				if val, ok := meta["user-agent"]; ok && len(val) > 0 {
-					fields["useragent"] = val[0]
-				}
-			}
-			s.infoLogger.WithFields(fields).Info("gRPC API Called")
-		}
-		return handler(ctx, req)
-	}
 }

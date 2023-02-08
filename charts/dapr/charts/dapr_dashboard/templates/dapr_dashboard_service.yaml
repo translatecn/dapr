@@ -1,12 +1,7 @@
-{{- if eq .Values.enabled true }}
 kind: Service
 apiVersion: v1
 metadata:
   name: dapr-dashboard
-  labels:
-    {{- range $key, $value := .Values.global.k8sLabels }}
-    {{ $key }}: {{ tpl $value $ }}
-    {{- end }}
   annotations:
     {{- range $key, $val := .Values.serviceAnnotations }}
     {{ $key }}: {{ $val | quote }}
@@ -19,4 +14,3 @@ spec:
     port: {{ .Values.ports.port }}
     targetPort: {{ .Values.ports.targetPort }}
   type: {{ .Values.serviceType }}
-{{- end }}

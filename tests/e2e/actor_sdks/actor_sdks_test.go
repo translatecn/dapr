@@ -1,24 +1,16 @@
-//go:build e2e
 // +build e2e
 
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package actor_sdks_e2e
 
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -35,10 +27,8 @@ const (
 	numHealthChecks = 60                   // Number of get calls before starting tests.
 )
 
-var (
-	tr   *runner.TestRunner
-	apps []kube.AppDescription
-)
+var tr *runner.TestRunner
+var apps []kube.AppDescription
 
 func healthCheckApp(t *testing.T, externalURL string, numHealthChecks int) {
 	t.Logf("Starting health check for %s\n", externalURL)
@@ -48,12 +38,19 @@ func healthCheckApp(t *testing.T, externalURL string, numHealthChecks int) {
 }
 
 func TestMain(m *testing.M) {
-	utils.SetupLogs("actor_sdks")
-	utils.InitHTTPClient(false)
-
 	// These apps will be deployed before starting actual test
 	// and will be cleaned up after all tests are finished automatically
 	apps = []kube.AppDescription{
+		{
+			AppName:          "actorjava",
+			DaprEnabled:      true,
+			ImageName:        "e2e-actorjava",
+			Replicas:         1,
+			IngressEnabled:   true,
+			MetricsEnabled:   true,
+			AppMemoryLimit:   "500Mi",
+			AppMemoryRequest: "200Mi",
+		},
 		{
 			AppName:          "actordotnet",
 			DaprEnabled:      true,
@@ -76,21 +73,10 @@ func TestMain(m *testing.M) {
 		},
 	}
 
-	if utils.TestTargetOS() != "windows" {
+	// Disables PHP test for Windows temporarily due to issues with its Windows container.
+	// See https://github.com/dapr/dapr/issues/2953
+	if runtime.GOOS != "windows" {
 		apps = append(apps,
-			// Disables Java test on Windows due to poor support for Java on Windows containers.
-			kube.AppDescription{
-				AppName:          "actorjava",
-				DaprEnabled:      true,
-				ImageName:        "e2e-actorjava",
-				Replicas:         1,
-				IngressEnabled:   true,
-				MetricsEnabled:   true,
-				AppMemoryLimit:   "500Mi",
-				AppMemoryRequest: "200Mi",
-			},
-			// Disables PHP test for Windows temporarily due to issues with its Windows container.
-			// See https://github.com/dapr/dapr/issues/2953
 			kube.AppDescription{
 				AppName:          "actorphp",
 				DaprEnabled:      true,
@@ -108,15 +94,11 @@ func TestMain(m *testing.M) {
 }
 
 func TestActorInvocationCrossSDKs(t *testing.T) {
-	actorTypes := []string{"DotNetCarActor", "PythonCarActor"}
-	if utils.TestTargetOS() != "windows" {
-		actorTypes = append(actorTypes,
-			// Disables Java test on Windows due to poor support for Java on Windows containers.
-			"JavaCarActor",
-			// Disables PHP test for Windows temporarily due to issues with its Windows container.
-			// See https://github.com/dapr/dapr/issues/2953
-			"PHPCarActor",
-		)
+	actorTypes := []string{"DotNetCarActor", "JavaCarActor", "PythonCarActor"}
+	// Disables PHP test for Windows temporarily due to issues with its Windows container.
+	// See https://github.com/dapr/dapr/issues/2953
+	if runtime.GOOS != "windows" {
+		actorTypes = append(actorTypes, "PHPCarActor")
 	}
 
 	scenarios := []struct {
@@ -194,7 +176,6 @@ func TestActorInvocationCrossSDKs(t *testing.T) {
 				method := fmt.Sprintf(tt.method, actorType, uuid.New().String())
 				name := fmt.Sprintf("Test %s calling %s", app, fmt.Sprintf(tt.method, actorType, "ActorId"))
 				t.Run(name, func(t *testing.T) {
-					t.Logf("invoking %s/%s", externalURL, method)
 					resp, err := utils.HTTPPost(fmt.Sprintf("%s/%s", externalURL, method), []byte(tt.payload))
 					t.Log("checking err...")
 					require.NoError(t, err)

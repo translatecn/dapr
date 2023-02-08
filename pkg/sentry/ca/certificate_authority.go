@@ -1,22 +1,22 @@
 package ca
 
 import (
-	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
-	"errors"
-	"fmt"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/pkg/errors"
+
+	"github.com/dapr/kit/logger"
 
 	"github.com/dapr/dapr/pkg/credentials"
 	"github.com/dapr/dapr/pkg/sentry/certs"
 	"github.com/dapr/dapr/pkg/sentry/config"
 	"github.com/dapr/dapr/pkg/sentry/csr"
 	"github.com/dapr/dapr/pkg/sentry/identity"
-	"github.com/dapr/kit/logger"
 )
 
 const (
@@ -29,9 +29,8 @@ const (
 
 var log = logger.NewLogger("dapr.sentry.ca")
 
-// CertificateAuthority represents an interface for a compliant Certificate Authority.
-// Responsibilities include loading trust anchors and issuer certs, providing safe access to the trust bundle,
-// Validating and signing CSRs.
+// CertificateAuthority 代表一个符合要求的证书颁发机构的接口。
+// 其职责包括加载信任锚和发行人的证书，提供对信任包的安全访问。 验证和签署CSR。
 type CertificateAuthority interface {
 	LoadOrStoreTrustBundle() error
 	GetCACertBundle() TrustRootBundler
@@ -40,7 +39,7 @@ type CertificateAuthority interface {
 }
 
 func NewCertificateAuthority(config config.SentryConfig) (CertificateAuthority, error) {
-	// Load future external CAs from components-contrib.
+	// 从contrib组件加载外部CAs
 	switch config.CAStore {
 	default:
 		return &defaultCA{
@@ -61,9 +60,10 @@ type SignedCertificate struct {
 	CertPEM     []byte
 }
 
-// LoadOrStoreTrustBundle loads the root cert and issuer cert from the configured secret store.
-// Validation is performed and a protected trust bundle is created holding the trust anchors
-// and issuer credentials. If successful, a watcher is launched to keep track of the issuer expiration.
+// LoadOrStoreTrustBundle
+// 从配置的秘密存储区加载根证书和颁发者证书。
+// 执行验证，并创建一个受保护的信任包，其中包含信任锚和颁发者凭据。
+// 如果成功，将启动一个观察程序来跟踪发行者的到期日。
 func (c *defaultCA) LoadOrStoreTrustBundle() error {
 	bundle, err := c.validateAndBuildTrustBundle()
 	if err != nil {
@@ -74,20 +74,19 @@ func (c *defaultCA) LoadOrStoreTrustBundle() error {
 	return nil
 }
 
-// GetCACertBundle returns the Trust Root Bundle.
+// GetCACertBundle 返回根证书绑定。
 func (c *defaultCA) GetCACertBundle() TrustRootBundler {
 	return c.bundle
 }
 
-// SignCSR signs a request with a PEM encoded CSR cert and duration.
-// If isCA is set to true, a CA cert will be issued. If isCA is set to false, a workload
-// Certificate will be issued instead.
+// SignCSR 用一个PEM编码的CSR证书和持续时间来签署请求。
+//如果 isCA 被设置为 true，将签发一个 CA 证书。如果isCA被设置为false，则将签发一个工作量证书。
 func (c *defaultCA) SignCSR(csrPem []byte, subject string, identity *identity.Bundle, ttl time.Duration, isCA bool) (*SignedCertificate, error) {
 	c.issuerLock.RLock()
 	defer c.issuerLock.RUnlock()
 
 	certLifetime := ttl
-	if certLifetime.Seconds() <= 0 {
+	if certLifetime.Seconds() < 0 {
 		certLifetime = c.config.WorkloadCertTTL
 	}
 
@@ -98,21 +97,21 @@ func (c *defaultCA) SignCSR(csrPem []byte, subject string, identity *identity.Bu
 
 	cert, err := certs.ParsePemCSR(csrPem)
 	if err != nil {
-		return nil, fmt.Errorf("error parsing csr pem: %w", err)
+		return nil, errors.Wrap(err, "error parsing csr pem")
 	}
 
-	crtb, err := csr.GenerateCSRCertificate(cert, subject, identity, signingCert, cert.PublicKey, signingKey, certLifetime, c.config.AllowedClockSkew, isCA)
+	crtb, err := csr.GenerateCSRCertificate(cert, subject, identity, signingCert, cert.PublicKey, signingKey.Key, certLifetime, c.config.AllowedClockSkew, isCA)
 	if err != nil {
-		return nil, fmt.Errorf("error signing csr: %w", err)
+		return nil, errors.Wrap(err, "error signing csr")
 	}
 
 	csrCert, err := x509.ParseCertificate(crtb)
 	if err != nil {
-		return nil, fmt.Errorf("error parsing cert: %w", err)
+		return nil, errors.Wrap(err, "error parsing cert")
 	}
 
 	certPem := pem.EncodeToMemory(&pem.Block{
-		Type:  certs.BlockTypeCertificate,
+		Type:  certs.Certificate,
 		Bytes: crtb,
 	})
 
@@ -128,7 +127,7 @@ func (c *defaultCA) ValidateCSR(csr *x509.CertificateRequest) error {
 	}
 	return nil
 }
-
+// 根据文件存不存在，判断需不需要创建
 func shouldCreateCerts(conf config.SentryConfig) bool {
 	exists, err := certs.CredentialsExist(conf)
 	if err != nil {
@@ -148,9 +147,10 @@ func shouldCreateCerts(conf config.SentryConfig) bool {
 	return false
 }
 
+//判断根证书是否加载完毕
 func detectCertificates(path string) error {
-	t := time.NewTicker(certDetectInterval)
-	timeout := time.After(certLoadTimeout)
+	t := time.NewTicker(certDetectInterval) // 一秒
+	timeout := time.After(certLoadTimeout)  // 等待证书加载超时时间
 
 	for {
 		select {
@@ -174,6 +174,7 @@ func (c *defaultCA) validateAndBuildTrustBundle() (*trustRootBundle, error) {
 	)
 
 	// certs exist on disk or getting created, load them when ready
+	// 证书存在于磁盘上或正在创建中，准备好时加载它们
 	if !shouldCreateCerts(c.config) {
 		err := detectCertificates(c.config.RootCertPath)
 		if err != nil {
@@ -182,12 +183,12 @@ func (c *defaultCA) validateAndBuildTrustBundle() (*trustRootBundle, error) {
 
 		certChain, err := credentials.LoadFromDisk(c.config.RootCertPath, c.config.IssuerCertPath, c.config.IssuerKeyPath)
 		if err != nil {
-			return nil, fmt.Errorf("error loading cert chain from disk: %w", err)
+			return nil, errors.Wrap(err, "error loading cert chain from disk")
 		}
 
 		issuerCreds, err = certs.PEMCredentialsFromFiles(certChain.Cert, certChain.Key)
 		if err != nil {
-			return nil, fmt.Errorf("error reading PEM credentials: %w", err)
+			return nil, errors.Wrap(err, "error reading PEM credentials")
 		}
 
 		rootCertBytes = certChain.RootCA
@@ -198,16 +199,16 @@ func (c *defaultCA) validateAndBuildTrustBundle() (*trustRootBundle, error) {
 		var err error
 		issuerCreds, rootCertBytes, issuerCertBytes, err = c.generateRootAndIssuerCerts()
 		if err != nil {
-			return nil, fmt.Errorf("error generating trust root bundle: %w", err)
+			return nil, errors.Wrap(err, "error generating trust root bundle")
 		}
 
 		log.Info("self signed certs generated and persisted successfully")
 	}
 
-	// load trust anchors
+	// 加载信任锚
 	trustAnchors, err := certs.CertPoolFromPEM(rootCertBytes)
 	if err != nil {
-		return nil, fmt.Errorf("error parsing cert pool for trust anchors: %w", err)
+		return nil, errors.Wrap(err, "error parsing cert pool for trust anchors")
 	}
 
 	return &trustRootBundle{
@@ -219,76 +220,69 @@ func (c *defaultCA) validateAndBuildTrustBundle() (*trustRootBundle, error) {
 	}, nil
 }
 
+//生成根、颁发者证书  return 颁发者证书结构体、根证书字节、颁发者证书字节
 func (c *defaultCA) generateRootAndIssuerCerts() (*certs.Credentials, []byte, []byte, error) {
-	rootKey, err := certs.GenerateECPrivateKey()
+	//都是使用的ecdsa签名算法
+	rootKey, err := certs.GenerateECPrivateKey() // 根秘钥
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	certsCredentials, rootCertPem, issuerCertPem, issuerKeyPem, err := GetNewSelfSignedCertificates(
-		rootKey, selfSignedRootCertLifetime, c.config.AllowedClockSkew)
+	rootCsr, err := csr.GenerateRootCertCSR(caOrg, caCommonName, &rootKey.PublicKey, selfSignedRootCertLifetime, c.config.AllowedClockSkew) // 证书签名请求
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	// store credentials so that next time sentry restarts it'll load normally
+
+	rootCertBytes, err := x509.CreateCertificate(rand.Reader, rootCsr, rootCsr, &rootKey.PublicKey, rootKey) // 根证书 二进制数据
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	rootCertPem := pem.EncodeToMemory(&pem.Block{Type: certs.Certificate, Bytes: rootCertBytes}) // 根证书
+
+	rootCert, err := x509.ParseCertificate(rootCertBytes) // 根证书 struct
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	issuerKey, err := certs.GenerateECPrivateKey() // 生成颁发者证书
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	// 颁发者签名
+	issuerCsr, err := csr.GenerateIssuerCertCSR(caCommonName, &issuerKey.PublicKey, selfSignedRootCertLifetime, c.config.AllowedClockSkew)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	issuerCertBytes, err := x509.CreateCertificate(rand.Reader, issuerCsr, rootCert, &issuerKey.PublicKey, rootKey)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	issuerCertPem := pem.EncodeToMemory(&pem.Block{Type: certs.Certificate, Bytes: issuerCertBytes})
+
+	encodedKey, err := x509.MarshalECPrivateKey(issuerKey)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	issuerKeyPem := pem.EncodeToMemory(&pem.Block{Type: certs.ECPrivateKey, Bytes: encodedKey})
+
+	issuerCert, err := x509.ParseCertificate(issuerCertBytes)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// 储存证书，以便下次sentry重新启动时能正常加载。
 	err = certs.StoreCredentials(c.config, rootCertPem, issuerCertPem, issuerKeyPem)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	return certsCredentials, rootCertPem, issuerCertPem, nil
-}
-
-func GetNewSelfSignedCertificates(
-	rootKey *ecdsa.PrivateKey,
-	selfSignedRootCertLifetime,
-	allowedClockSkew time.Duration,
-) (*certs.Credentials, []byte, []byte, []byte, error) {
-	rootCsr, err := csr.GenerateRootCertCSR(caOrg, caCommonName, &rootKey.PublicKey, selfSignedRootCertLifetime, allowedClockSkew)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	rootCertBytes, err := x509.CreateCertificate(rand.Reader, rootCsr, rootCsr, &rootKey.PublicKey, rootKey)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	rootCertPem := pem.EncodeToMemory(&pem.Block{Type: certs.BlockTypeCertificate, Bytes: rootCertBytes})
-
-	rootCert, err := x509.ParseCertificate(rootCertBytes)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	issuerKey, err := certs.GenerateECPrivateKey()
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	issuerCsr, err := csr.GenerateIssuerCertCSR(caCommonName, &issuerKey.PublicKey, selfSignedRootCertLifetime, allowedClockSkew)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	issuerCertBytes, err := x509.CreateCertificate(rand.Reader, issuerCsr, rootCert, &issuerKey.PublicKey, rootKey)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	issuerCertPem := pem.EncodeToMemory(&pem.Block{Type: certs.BlockTypeCertificate, Bytes: issuerCertBytes})
-
-	encodedKey, err := x509.MarshalECPrivateKey(issuerKey)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	issuerKeyPem := pem.EncodeToMemory(&pem.Block{Type: certs.BlockTypeECPrivateKey, Bytes: encodedKey})
-
-	issuerCert, err := x509.ParseCertificate(issuerCertBytes)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
 	return &certs.Credentials{
-		PrivateKey:  issuerKey,
+		PrivateKey: &certs.PrivateKey{
+			Type: certs.ECPrivateKey,
+			Key:  issuerKey,
+		},
 		Certificate: issuerCert,
-	}, rootCertPem, issuerCertPem, issuerKeyPem, nil
+	}, rootCertPem, issuerCertPem, nil
 }

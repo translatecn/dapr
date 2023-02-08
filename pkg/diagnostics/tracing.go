@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package diagnostics
 
@@ -19,17 +11,16 @@ import (
 	"fmt"
 	"strings"
 
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
+	"go.opencensus.io/trace"
+	"go.opencensus.io/trace/tracestate"
 
 	"github.com/dapr/dapr/pkg/config"
-	diagUtils "github.com/dapr/dapr/pkg/diagnostics/utils"
+	diag_utils "github.com/dapr/dapr/pkg/diagnostics/utils"
 
 	// We currently don't depend on the Otel SDK since it has not GAed.
 	// This package, however, only contains the conventions from the Otel Spec,
 	// which we do depend on.
-	semconv "go.opentelemetry.io/otel/semconv/v1.10.0"
+	"go.opentelemetry.io/otel/semconv"
 )
 
 const (
@@ -77,33 +68,36 @@ const (
 
 	daprGRPCServiceInvocationService = "ServiceInvocation"
 	daprGRPCDaprService              = "Dapr"
-
-	tracerName = "dapr-diagnostics"
 )
 
-var tracer trace.Tracer = otel.Tracer(tracerName)
-
 // Effectively const, but isn't a const from upstream.
-var messagingDestinationTopicKind = semconv.MessagingDestinationKindTopic.Value.AsString()
+var messagingDestinationTopicKind = semconv.MessagingDestinationKindKeyTopic.Value.AsString()
 
-// SpanContextToW3CString returns the SpanContext string representation.
+// SpanContextToW3CString 返回SpanContext的字符串表示法。
 func SpanContextToW3CString(sc trace.SpanContext) string {
-	traceID := sc.TraceID()
-	spanID := sc.SpanID()
-	traceFlags := sc.TraceFlags()
 	return fmt.Sprintf("%x-%x-%x-%x",
 		[]byte{supportedVersion},
-		traceID[:],
-		spanID[:],
-		[]byte{byte(traceFlags)})
+		sc.TraceID[:],
+		sc.SpanID[:],
+		[]byte{byte(sc.TraceOptions)})
 }
 
-// TraceStateToW3CString extracts the TraceState from given SpanContext and returns its string representation.
+// TraceStateToW3CString 从给定的SpanContext中提取TraceState并返回其字符串表示。
 func TraceStateToW3CString(sc trace.SpanContext) string {
-	return sc.TraceState().String()
+	pairs := make([]string, 0, len(sc.Tracestate.Entries()))
+	if sc.Tracestate != nil {
+		for _, entry := range sc.Tracestate.Entries() {
+			pairs = append(pairs, strings.Join([]string{entry.Key, entry.Value}, "="))
+		}
+		h := strings.Join(pairs, ",")
+		if h != "" && len(h) <= maxTracestateLen { //512
+			return h
+		}
+	}
+	return ""
 }
 
-// SpanContextFromW3CString extracts a span context from given string which got earlier from SpanContextToW3CString format.
+// SpanContextFromW3CString 从先前从SpanContextToW3CString格式得到的给定字符串中提取一个跨度上下文。
 func SpanContextFromW3CString(h string) (sc trace.SpanContext, ok bool) {
 	if h == "" {
 		return trace.SpanContext{}, false
@@ -132,29 +126,29 @@ func SpanContextFromW3CString(h string) (sc trace.SpanContext, ok bool) {
 	if len(sections[1]) != 32 {
 		return trace.SpanContext{}, false
 	}
-	tid, err := trace.TraceIDFromHex(sections[1])
+	tid, err := hex.DecodeString(sections[1])
 	if err != nil {
 		return trace.SpanContext{}, false
 	}
-	sc = sc.WithTraceID(tid)
+	copy(sc.TraceID[:], tid)
 
 	if len(sections[2]) != 16 {
 		return trace.SpanContext{}, false
 	}
-	sid, err := trace.SpanIDFromHex(sections[2])
+	sid, err := hex.DecodeString(sections[2])
 	if err != nil {
 		return trace.SpanContext{}, false
 	}
-	sc = sc.WithSpanID(sid)
+	copy(sc.SpanID[:], sid)
 
 	opts, err := hex.DecodeString(sections[3])
 	if err != nil || len(opts) < 1 {
 		return trace.SpanContext{}, false
 	}
-	sc = sc.WithTraceFlags(trace.TraceFlags(opts[0]))
+	sc.TraceOptions = trace.TraceOptions(opts[0])
 
 	// Don't allow all zero trace or span ID.
-	if sc.TraceID() == [16]byte{} || sc.SpanID() == [8]byte{} {
+	if sc.TraceID == [16]byte{} || sc.SpanID == [8]byte{} {
 		return trace.SpanContext{}, false
 	}
 
@@ -162,36 +156,53 @@ func SpanContextFromW3CString(h string) (sc trace.SpanContext, ok bool) {
 }
 
 // TraceStateFromW3CString extracts a span tracestate from given string which got earlier from TraceStateFromW3CString format.
-func TraceStateFromW3CString(h string) *trace.TraceState {
+func TraceStateFromW3CString(h string) *tracestate.Tracestate {
 	if h == "" {
-		ts := trace.TraceState{}
-		return &ts
+		return nil
 	}
 
-	ts, err := trace.ParseTraceState(h)
+	entries := make([]tracestate.Entry, 0, len(h))
+	pairs := strings.Split(h, ",")
+	hdrLenWithoutOWS := len(pairs) - 1 // Number of commas
+	for _, pair := range pairs {
+		matches := trimOWSRegExp.FindStringSubmatch(pair)
+		if matches == nil {
+			return nil
+		}
+		pair = matches[1]
+		hdrLenWithoutOWS += len(pair)
+		if hdrLenWithoutOWS > maxTracestateLen {
+			return nil
+		}
+		kv := strings.Split(pair, "=")
+		if len(kv) != 2 {
+			return nil
+		}
+		entries = append(entries, tracestate.Entry{Key: kv[0], Value: kv[1]})
+	}
+	ts, err := tracestate.New(nil, entries...)
 	if err != nil {
-		ts = trace.TraceState{}
-		return &ts
+		return nil
 	}
 
-	return &ts
+	return ts
 }
 
 // AddAttributesToSpan adds the given attributes in the span.
-func AddAttributesToSpan(span trace.Span, attributes map[string]string) {
+func AddAttributesToSpan(span *trace.Span, attributes map[string]string) {
 	if span == nil {
 		return
 	}
-	var attrs []attribute.KeyValue
+
+	var attrs []trace.Attribute
 	for k, v := range attributes {
 		// Skip if key is for internal use.
 		if !strings.HasPrefix(k, daprInternalSpanAttrPrefix) && v != "" {
-			attrs = append(attrs, attribute.String(k, v))
+			attrs = append(attrs, trace.StringAttribute(k, v))
 		}
 	}
-
 	if len(attrs) > 0 {
-		span.SetAttributes(attrs...)
+		span.AddAttributes(attrs...)
 	}
 }
 
@@ -215,14 +226,12 @@ func ConstructSubscriptionSpanAttributes(topic string) map[string]string {
 }
 
 // StartInternalCallbackSpan starts trace span for internal callback such as input bindings and pubsub subscription.
-func StartInternalCallbackSpan(ctx context.Context, spanName string, parent trace.SpanContext, spec config.TracingSpec) (context.Context, trace.Span) {
-	traceEnabled := diagUtils.IsTracingEnabled(spec.SamplingRate)
+func StartInternalCallbackSpan(ctx context.Context, spanName string, parent trace.SpanContext, spec config.TracingSpec) (context.Context, *trace.Span) {
+	traceEnabled := diag_utils.IsTracingEnabled(spec.SamplingRate)
 	if !traceEnabled {
 		return ctx, nil
 	}
 
-	ctx = trace.ContextWithRemoteSpanContext(ctx, parent)
-	ctx, span := tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient))
-
-	return ctx, span
+	sampler := diag_utils.TraceSampler(spec.SamplingRate)
+	return trace.StartSpanWithRemoteParent(ctx, spanName, parent, sampler, trace.WithSpanKind(trace.SpanKindServer))
 }

@@ -1,0 +1,108 @@
+# ------------------------------------------------------------
+# Copyright (c) Microsoft Corporation and Dapr Contributors.
+# Licensed under the MIT License.
+# ------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mesoid
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: redis-statestore
+  namespace: mesoid
+spec:
+  type: state.redis
+  version: v1
+  initTimeout: 1m
+  metadata:
+    - name: redisHost
+      value: "dapr-redis-svc:45454"
+    - name: redisPassword
+      value: "1234"
+    - name: keyPrefix
+      value: "{uuid}"
+
+#    -name: redisUsername
+#    -name: redisDB
+#    -name: redisType
+#    -name: redisMaxRetries
+#    -name: redisMinRetryInterval
+#    -name: redisMaxRetryInterval
+#    -name: writeTimeout
+#    -name: readTimeout
+#    -name: dialTimeout
+#    -name: poolSize
+#    -name: minIdleConns
+#    -name: maxConnAge
+#    -name: poolTimeout
+#    -name: idleTimeout
+#    -name: idleCheckFrequency
+#    -name: sentinelMasterName
+#    -name: failover
+#    -name: enableTLS
+
+    - name: actorStateStore
+      value: true
+#       default 3
+auth:
+  secretStore: "auth"
+
+
+
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dapr-redis-config
+  namespace: mesoid
+data:
+  redis.conf: |
+    bind 0.0.0.0
+    port 6379
+    requirepass 1234
+    appendonly yes
+    protected-mode no
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dapr-redis
+  namespace: mesoid
+  labels:
+    app: dapr-redis-test
+spec:
+  containers:
+    - name: redis
+      image: redis:latest
+      command:
+        - sh
+        - -c
+        - exec redis-server /usr/local/etc/redis/redis.conf
+      ports:
+        - containerPort: 6379
+      volumeMounts:
+        - name: redis-config
+          mountPath: /usr/local/etc/redis
+  volumes:
+    - name: redis-config
+      configMap:
+        name: dapr-redis-config
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: dapr-redis-svc
+  namespace: mesoid
+  labels:
+    app: dapr-redis-test
+spec:
+  type: NodePort
+  selector:
+    app: dapr-redis-test
+  ports:
+    - protocol: TCP
+      port: 45454
+      targetPort: 6379

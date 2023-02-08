@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package main
 
@@ -17,12 +9,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
+	"net/http"
 	"os"
 	"time"
-
-	"github.com/dapr/dapr/tests/apps/utils"
 )
 
 const (
@@ -33,15 +23,11 @@ const (
 	publishRetries = 10
 )
 
-var httpClient = utils.NewHTTPClient()
-
 func stopSidecar() {
 	log.Printf("Shutting down the sidecar at %s", fmt.Sprintf("http://localhost:%d/v1.0/shutdown", daprPort))
 	for retryCount := 0; retryCount < 200; retryCount++ {
-		r, err := httpClient.Post(fmt.Sprintf("http://localhost:%d/v1.0/shutdown", daprPort), "", bytes.NewBuffer([]byte{}))
+		r, err := http.Post(fmt.Sprintf("http://localhost:%d/v1.0/shutdown", daprPort), "", bytes.NewBuffer([]byte{}))
 		if r != nil {
-			// Drain before closing
-			_, _ = io.Copy(io.Discard, r.Body)
 			r.Body.Close()
 		}
 		if err != nil {
@@ -65,11 +51,10 @@ func publishMessagesToPubsub() error {
 		log.Printf("Error marshalling %s to JSON", message)
 	}
 	log.Printf("Publishing to %s", daprPubsubURL)
-	r, err := httpClient.Post(daprPubsubURL, "application/json", bytes.NewBuffer(jsonValue))
+	// nolint: gosec
+	r, err := http.Post(daprPubsubURL, "application/json", bytes.NewBuffer(jsonValue))
 	if r != nil {
-		// Drain before closing
-		_, _ = io.Copy(io.Discard, r.Body)
-		r.Body.Close()
+		defer r.Body.Close()
 	}
 	if err != nil {
 		log.Printf("Error publishing messages to pubsub: %+v", err)

@@ -1,22 +1,12 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package operator
 
 import (
 	"context"
-	"errors"
-	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeutil "k8s.io/apimachinery/pkg/util/runtime"
@@ -27,14 +17,13 @@ import (
 
 	componentsapi "github.com/dapr/dapr/pkg/apis/components/v1alpha1"
 	configurationapi "github.com/dapr/dapr/pkg/apis/configuration/v1alpha1"
-	resiliencyapi "github.com/dapr/dapr/pkg/apis/resiliency/v1alpha1"
-	subscriptionsapiV1alpha1 "github.com/dapr/dapr/pkg/apis/subscriptions/v1alpha1"
-	subscriptionsapiV2alpha1 "github.com/dapr/dapr/pkg/apis/subscriptions/v2alpha1"
+	subscriptionsapi_v1alpha1 "github.com/dapr/dapr/pkg/apis/subscriptions/v1alpha1"
+	subscriptionsapi_v2alpha1 "github.com/dapr/dapr/pkg/apis/subscriptions/v2alpha1"
 	"github.com/dapr/dapr/pkg/credentials"
+	"github.com/dapr/dapr/pkg/fswatcher"
 	"github.com/dapr/dapr/pkg/health"
 	"github.com/dapr/dapr/pkg/operator/api"
 	"github.com/dapr/dapr/pkg/operator/handlers"
-	"github.com/dapr/kit/fswatcher"
 	"github.com/dapr/kit/logger"
 )
 
@@ -49,19 +38,9 @@ type Operator interface {
 	Run(ctx context.Context)
 }
 
-// Options contains the options for `NewOperator`.
-type Options struct {
-	Config                    string
-	CertChainPath             string
-	LeaderElection            bool
-	WatchdogEnabled           bool
-	WatchdogInterval          time.Duration
-	WatchdogMaxRestartsPerMin int
-	WatchNamespace            string
-}
-
 type operator struct {
-	daprHandler *handlers.DaprHandler
+	ctx         context.Context
+	daprHandler handlers.Handler
 	apiServer   api.Server
 
 	configName    string
@@ -79,66 +58,40 @@ func init() {
 
 	_ = componentsapi.AddToScheme(scheme)
 	_ = configurationapi.AddToScheme(scheme)
-	_ = resiliencyapi.AddToScheme(scheme)
-	_ = subscriptionsapiV1alpha1.AddToScheme(scheme)
-	_ = subscriptionsapiV2alpha1.AddToScheme(scheme)
+	_ = subscriptionsapi_v1alpha1.AddToScheme(scheme)
+	_ = subscriptionsapi_v2alpha1.AddToScheme(scheme)
 }
 
 // NewOperator returns a new Dapr Operator.
-func NewOperator(opts Options) Operator {
+func NewOperator(config, certChainPath string, enableLeaderElection bool) Operator {
 	conf, err := ctrl.GetConfig()
 	if err != nil {
-		log.Fatalf("Unable to get controller runtime configuration, err: %s", err)
+		log.Fatalf("unable to get controller runtime configuration, err: %s", err)
 	}
 	mgr, err := ctrl.NewManager(conf, ctrl.Options{
 		Scheme:             scheme,
 		MetricsBindAddress: "0",
-		LeaderElection:     opts.LeaderElection,
+		LeaderElection:     enableLeaderElection,
 		LeaderElectionID:   "operator.dapr.io",
-		Namespace:          opts.WatchNamespace,
 	})
 	if err != nil {
-		log.Fatalf("Unable to start manager, err: %s", err)
+		log.Fatal("unable to start manager")
 	}
-	mgrClient := mgr.GetClient()
-
-	if opts.WatchdogEnabled {
-		if !opts.LeaderElection {
-			log.Warn("Leadership election is forcibly enabled when the Dapr Watchdog is enabled")
-		}
-		wd := &DaprWatchdog{
-			client:            mgrClient,
-			interval:          opts.WatchdogInterval,
-			maxRestartsPerMin: opts.WatchdogMaxRestartsPerMin,
-		}
-		err = mgr.Add(wd)
-		if err != nil {
-			log.Fatalf("Unable to add watchdog controller, err: %s", err)
-		}
-	} else {
-		log.Infof("Dapr Watchdog is not enabled")
-	}
-
 	daprHandler := handlers.NewDaprHandler(mgr)
-	err = daprHandler.Init()
-	if err != nil {
-		log.Fatalf("Unable to initialize handler, err: %s", err)
+	if err := daprHandler.Init(); err != nil {
+		log.Fatalf("unable to initialize handler, err: %s", err)
 	}
 
 	o := &operator{
 		daprHandler:   daprHandler,
 		mgr:           mgr,
-		client:        mgrClient,
-		configName:    opts.Config,
-		certChainPath: opts.CertChainPath,
+		client:        mgr.GetClient(),
+		configName:    config,
+		certChainPath: certChainPath,
 	}
 	o.apiServer = api.NewAPIServer(o.client)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	componentInformer, err := mgr.GetCache().GetInformer(ctx, &componentsapi.Component{})
-	cancel()
-	if err != nil {
-		log.Fatalf("Unable to get setup components informer, err: %s", err)
+	if componentInformer, err := mgr.GetCache().GetInformer(context.TODO(), &componentsapi.Component{}); err != nil {
+		log.Fatalf("unable to get setup components informer, err: %s", err)
 	} else {
 		componentInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 			AddFunc: o.syncComponent,
@@ -147,7 +100,6 @@ func NewOperator(opts Options) Operator {
 			},
 		})
 	}
-
 	return o
 }
 
@@ -155,7 +107,7 @@ func (o *operator) prepareConfig() {
 	var err error
 	o.config, err = LoadConfiguration(o.configName, o.client)
 	if err != nil {
-		log.Fatalf("Unable to load configuration, config: %s, err: %s", o.configName, err)
+		log.Fatalf("unable to load configuration, config: %s, err: %s", o.configName, err)
 	}
 	o.config.Credentials = credentials.NewTLSCredentials(o.certChainPath)
 }
@@ -163,79 +115,69 @@ func (o *operator) prepareConfig() {
 func (o *operator) syncComponent(obj interface{}) {
 	c, ok := obj.(*componentsapi.Component)
 	if ok {
-		log.Debugf("Observed component to be synced, %s/%s", c.Namespace, c.Name)
+		log.Debugf("observed component to be synced, %s/%s", c.Namespace, c.Name)
 		o.apiServer.OnComponentUpdated(c)
 	}
 }
 
-func (o *operator) loadCertChain(ctx context.Context) (certChain *credentials.CertChain) {
-	log.Info("Getting TLS certificates")
-
-	watchCtx, watchCancel := context.WithTimeout(ctx, time.Minute)
-	fsevent := make(chan struct{})
-	go func() {
-		log.Infof("Starting watch for certs on filesystem: %s", o.config.Credentials.Path())
-		err := fswatcher.Watch(watchCtx, o.config.Credentials.Path(), fsevent)
-		// Watch always returns an error, which is context.Canceled if everything went well
-		if err != nil && !errors.Is(err, context.Canceled) {
-			log.Fatalf("Error starting watch on filesystem: %s", err)
-		}
-		close(fsevent)
-		if watchCtx.Err() == context.DeadlineExceeded {
-			log.Fatal("Timeout while waiting to load TLS certificates")
-		}
-	}()
-
-	for {
-		chain, err := credentials.LoadFromDisk(o.config.Credentials.RootCertPath(), o.config.Credentials.CertPath(), o.config.Credentials.KeyPath())
-		if err == nil {
-			log.Info("TLS certificates loaded successfully")
-			certChain = chain
-			break
-		}
-		log.Infof("TLS certificate not found; waiting for disk changes. err=%v", err)
-		<-fsevent
-		log.Debug("Watcher found activity on filesystem")
-	}
-
-	watchCancel()
-
-	return certChain
-}
-
 func (o *operator) Run(ctx context.Context) {
 	defer runtimeutil.HandleCrash()
-
-	log.Infof("Dapr Operator is starting")
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	o.ctx = ctx
+	go func() {
+		<-ctx.Done()
+		log.Infof("Dapr Operator is shutting down")
+	}()
+	log.Infof("Dapr Operator is started")
 
 	go func() {
 		if err := o.mgr.Start(ctx); err != nil {
-			log.Fatalf("Failed to start controller manager, err: %s", err)
+			if err != nil {
+				log.Fatalf("failed to start controller manager, err: %s", err)
+			}
 		}
 	}()
 	if !o.mgr.GetCache().WaitForCacheSync(ctx) {
-		log.Fatalf("Failed to wait for cache sync")
+		log.Fatalf("failed to wait for cache sync")
 	}
 	o.prepareConfig()
 
-	// load certs from disk
-	certChain := o.loadCertChain(ctx)
+	var certChain *credentials.CertChain
+	log.Info("getting tls certificates")
+	// try to load certs from disk, if not yet there, start a watch on the local filesystem
+	chain, err := credentials.LoadFromDisk(o.config.Credentials.RootCertPath(), o.config.Credentials.CertPath(), o.config.Credentials.KeyPath())
+	if err != nil {
+		fsevent := make(chan struct{})
 
-	// start healthz server
-	healthzServer := health.NewServer(log)
+		go func() {
+			log.Infof("starting watch for certs on filesystem: %s", o.config.Credentials.Path())
+			err = fswatcher.Watch(ctx, o.config.Credentials.Path(), fsevent)
+			if err != nil {
+				log.Fatal("error starting watch on filesystem: %s", err)
+			}
+		}()
+
+		<-fsevent
+		log.Info("certificates detected")
+
+		chain, err = credentials.LoadFromDisk(o.config.Credentials.RootCertPath(), o.config.Credentials.CertPath(), o.config.Credentials.KeyPath())
+		if err != nil {
+			log.Fatal("failed to load cert chain from disk: %s", err)
+		}
+	}
+	certChain = chain
+	log.Info("tls certificates loaded successfully")
+
 	go func() {
-		// blocking call
+		healthzServer := health.NewServer(log)
+		healthzServer.Ready()
+
 		err := healthzServer.Run(ctx, healthzPort)
 		if err != nil {
-			log.Fatalf("Failed to start healthz server: %s", err)
+			log.Fatalf("failed to start healthz server: %s", err)
 		}
 	}()
 
-	// blocking call
-	o.apiServer.Run(ctx, certChain, func() {
-		healthzServer.Ready()
-		log.Infof("Dapr Operator started")
-	})
-
-	log.Infof("Dapr Operator is shutting down")
+	o.apiServer.Run(certChain)
 }

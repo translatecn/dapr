@@ -1,63 +1,50 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
-//nolint:forbidigo
 package runtime
 
 import (
-	"errors"
 	"flag"
 	"fmt"
+	daprd_debug "github.com/dapr/dapr/code_debug/daprd"
+	"github.com/dapr/dapr/pkg/operator/client"
 	"os"
+	"path"
 	"strconv"
 	"strings"
-	"time"
 
-	"github.com/phayes/freeport"
+	"github.com/pkg/errors"
+
+	"github.com/dapr/kit/logger" // ok
 
 	"github.com/dapr/dapr/pkg/acl"
-	resiliencyV1alpha "github.com/dapr/dapr/pkg/apis/resiliency/v1alpha1"
-	"github.com/dapr/dapr/pkg/apphealth"
-	"github.com/dapr/dapr/pkg/buildinfo"
-	daprGlobalConfig "github.com/dapr/dapr/pkg/config"
+	global_config "github.com/dapr/dapr/pkg/config"
 	env "github.com/dapr/dapr/pkg/config/env"
 	"github.com/dapr/dapr/pkg/cors"
-	diag "github.com/dapr/dapr/pkg/diagnostics"
+	"github.com/dapr/dapr/pkg/grpc"
 	"github.com/dapr/dapr/pkg/metrics"
 	"github.com/dapr/dapr/pkg/modes"
-	"github.com/dapr/dapr/pkg/operator/client"
-	operatorV1 "github.com/dapr/dapr/pkg/proto/operator/v1"
-	resiliencyConfig "github.com/dapr/dapr/pkg/resiliency"
 	"github.com/dapr/dapr/pkg/runtime/security"
-	"github.com/dapr/dapr/pkg/validation"
-	"github.com/dapr/dapr/utils"
-	"github.com/dapr/kit/logger"
-	"github.com/dapr/kit/ptr"
+	"github.com/dapr/dapr/pkg/version" // ok
+	"github.com/dapr/dapr/utils"       // ok
 )
 
-// FromFlags parses command flags and returns DaprRuntime instance.
+// FromFlags 解析命令行参数, 返回DaprRuntime 实例
 func FromFlags() (*DaprRuntime, error) {
 	mode := flag.String("mode", string(modes.StandaloneMode), "Runtime mode for Dapr")
-	daprHTTPPort := flag.String("dapr-http-port", strconv.Itoa(DefaultDaprHTTPPort), "HTTP port for Dapr API to listen on")
+	daprHTTPPort := flag.String("dapr-http-port", fmt.Sprintf("%v", DefaultDaprHTTPPort), "HTTP port for Dapr API to listen on")
 	daprAPIListenAddresses := flag.String("dapr-listen-addresses", DefaultAPIListenAddress, "One or more addresses for the Dapr API to listen on, CSV limited")
+	// 健康检查、元数据 监听端口
 	daprPublicPort := flag.String("dapr-public-port", "", "Public port for Dapr Health and Metadata to listen on")
-	daprAPIGRPCPort := flag.String("dapr-grpc-port", strconv.Itoa(DefaultDaprAPIGRPCPort), "gRPC port for the Dapr API to listen on")
+	daprAPIGRPCPort := flag.String("dapr-grpc-port", fmt.Sprintf("%v", DefaultDaprAPIGRPCPort), "gRPC port for the Dapr API to listen on")
 	daprInternalGRPCPort := flag.String("dapr-internal-grpc-port", "", "gRPC port for the Dapr Internal API to listen on")
+
 	appPort := flag.String("app-port", "", "The port the application is listening on")
-	profilePort := flag.String("profile-port", strconv.Itoa(DefaultProfilePort), "The port for the profile server")
-	appProtocolPtr := flag.String("app-protocol", string(HTTPProtocol), "Protocol for the application: grpc or http")
-	componentsPath := flag.String("components-path", "", "Path for components directory. If empty, components will not be loaded. Self-hosted mode only")
-	resourcesPath := flag.String("resources-path", "", "Path for resources directory. If empty, resources will not be loaded. Self-hosted mode only")
+	profilePort := flag.String("profile-port", fmt.Sprintf("%v", DefaultProfilePort), "The port for the profile server")
+	appProtocol := flag.String("app-protocol", string(HTTPProtocol), "Protocol for the application: grpc or http")
+	componentsPath := flag.String("components-path", "~/.dapr/components", "Path for components directory. If empty, components will not be loaded. Self-hosted mode only")
 	config := flag.String("config", "", "Path to config file, or name of a configuration object")
 	appID := flag.String("app-id", "", "A unique ID for Dapr. Used for Service Discovery and state")
 	controlPlaneAddress := flag.String("control-plane-address", "", "Address for a Dapr control plane")
@@ -67,109 +54,114 @@ func FromFlags() (*DaprRuntime, error) {
 	enableProfiling := flag.Bool("enable-profiling", false, "Enable profiling")
 	runtimeVersion := flag.Bool("version", false, "Prints the runtime version")
 	buildInfo := flag.Bool("build-info", false, "Prints the build info")
+	//等待Dapr出站准备就绪
 	waitCommand := flag.Bool("wait", false, "wait for Dapr outbound ready")
-	appMaxConcurrency := flag.Int("app-max-concurrency", -1, "Controls the concurrency level when forwarding requests to user code; set to -1 for no limits")
+	appMaxConcurrency := flag.Int("app-max-concurrency", -1, "Controls the concurrency level when forwarding requests to user code")
 	enableMTLS := flag.Bool("enable-mtls", false, "Enables automatic mTLS for daprd to daprd communication channels")
+	//将应用程序的URI方案设置为https并尝试SSL连接
 	appSSL := flag.Bool("app-ssl", false, "Sets the URI scheme of the app to https and attempts an SSL connection")
-	daprHTTPMaxRequestSize := flag.Int("dapr-http-max-request-size", DefaultMaxRequestBodySize, "Increasing max size of request body in MB to handle uploading of big files")
+	// 请求体的最大大小(以MB为单位)来处理大文件的上传。默认为4mb。
+	daprHTTPMaxRequestSize := flag.Int("dapr-http-max-request-size", -1, "Increasing max size of request body in MB to handle uploading of big files. By default 4 MB.")
+	//到unix域套接字目录的路径。如果指定，Dapr API服务器将使用Unix域套接字
 	unixDomainSocket := flag.String("unix-domain-socket", "", "Path to a unix domain socket dir mount. If specified, Dapr API servers will use Unix Domain Sockets")
-	daprHTTPReadBufferSize := flag.Int("dapr-http-read-buffer-size", DefaultReadBufferSize, "Increasing max size of read buffer in KB to handle sending multi-KB headers")
-	daprGracefulShutdownSeconds := flag.Int("dapr-graceful-shutdown-seconds", int(DefaultGracefulShutdownDuration/time.Second), "Graceful shutdown time in seconds")
-	enableAPILogging := flag.Bool("enable-api-logging", false, "Enable API logging for API calls")
-	disableBuiltinK8sSecretStore := flag.Bool("disable-builtin-k8s-secret-store", false, "Disable the built-in Kubernetes Secret Store")
-	enableAppHealthCheck := flag.Bool("enable-app-health-check", false, "Enable health checks for the application using the protocol defined with app-protocol")
-	appHealthCheckPath := flag.String("app-health-check-path", DefaultAppHealthCheckPath, "Path used for health checks; HTTP only")
-	appHealthProbeInterval := flag.Int("app-health-probe-interval", int(apphealth.DefaultProbeInterval/time.Second), "Interval to probe for the health of the app in seconds")
-	appHealthProbeTimeout := flag.Int("app-health-probe-timeout", int(apphealth.DefaultProbeTimeout/time.Millisecond), "Timeout for app health probes in milliseconds")
-	appHealthThreshold := flag.Int("app-health-threshold", int(apphealth.DefaultThreshold), "Number of consecutive failures for the app to be considered unhealthy")
-
+	//增加以KB为单位的读缓冲区的最大大小，以处理发送多KB的报头。缺省值为4kb。
+	daprHTTPReadBufferSize := flag.Int("dapr-http-read-buffer-size", -1, "Increasing max size of read buffer in KB to handle sending multi-KB headers. By default 4 KB.")
+	//在http服务器上启用请求正文流
+	daprHTTPStreamRequestBody := flag.Bool("dapr-http-stream-request-body", false, "Enables request body streaming on http server")
 	loggerOptions := logger.DefaultOptions()
 	loggerOptions.AttachCmdFlags(flag.StringVar, flag.BoolVar)
 
 	metricsExporter := metrics.NewExporter(metrics.DefaultMetricNamespace)
 
 	metricsExporter.Options().AttachCmdFlags(flag.StringVar, flag.BoolVar)
+	daprd_debug.PRE(
+		// *string
+		mode, daprHTTPPort, daprAPIGRPCPort,
+		appPort, appID, controlPlaneAddress, appProtocol, placementServiceHostAddr, config,
+		sentryAddress, &loggerOptions.OutputLevel,
+		&metricsExporter.Options().Port,
+		daprInternalGRPCPort,
+		//*int
+		appMaxConcurrency,
+		daprHTTPMaxRequestSize,
+		//*bool
+		&metricsExporter.Options().MetricsEnabled,
+		enableMTLS,
+	)
 
 	flag.Parse()
-
-	// flag.Parse() will always set a value to "enableAPILogging", and it will be false whether it's explicitly set to false or unset
-	// For this flag, we need the third state (unset) so we need to do a bit more work here to check if it's unset, then mark "enableAPILogging" as nil
-	// It's not the prettiest approach, but…
-	if !*enableAPILogging {
-		enableAPILogging = nil
-		for _, v := range os.Args {
-			if strings.HasPrefix(v, "--enable-api-logging") || strings.HasPrefix(v, "-enable-api-logging") {
-				// This means that enable-api-logging was explicitly set to false
-				enableAPILogging = ptr.Of(false)
-				break
-			}
-		}
-	}
-
-	if *resourcesPath != "" {
-		componentsPath = resourcesPath
-	}
-
+	loggerOptions.SetOutputLevel("debug")
 	if *runtimeVersion {
-		fmt.Println(buildinfo.Version())
+		fmt.Println(version.Version())
 		os.Exit(0)
 	}
 
 	if *buildInfo {
-		fmt.Printf("Version: %s\nGit Commit: %s\nGit Version: %s\n", buildinfo.Version(), buildinfo.Commit(), buildinfo.GitVersion())
+		fmt.Printf("Version: %s\nGit Commit: %s\nGit Version: %s\n", version.Version(), version.Commit(), version.GitVersion())
 		os.Exit(0)
 	}
 
 	if *waitCommand {
+		//等待，直到Dapr 输出绑定 就绪
 		waitUntilDaprOutboundReady(*daprHTTPPort)
 		os.Exit(0)
 	}
 
-	if *mode == string(modes.StandaloneMode) {
-		if err := validation.ValidateSelfHostedAppID(*appID); err != nil {
-			return nil, err
-		}
+	if *appID == "" {
+		return nil, errors.New("app-id parameter cannot be empty")
 	}
 
-	// Apply options to all loggers
+	// 设置应用ID
 	loggerOptions.SetAppID(*appID)
+	//将配置应用到所有注册的logger上 ，都在全局变量初始化好了
+
 	if err := logger.ApplyOptionsToLoggers(&loggerOptions); err != nil {
 		return nil, err
 	}
 
-	log.Infof("starting Dapr Runtime -- version %s -- commit %s", buildinfo.Version(), buildinfo.Commit())
+	log.Infof("starting Dapr Runtime -- version %s -- commit %s", version.Version(), version.Commit())
 	log.Infof("log level set to: %s", loggerOptions.OutputLevel)
 
-	// Initialize dapr metrics exporter
+	// 启动指标暴露程序  9090端口
 	if err := metricsExporter.Init(); err != nil {
 		log.Fatal(err)
 	}
+	//dapr-http: 3500/TCP
+	//dapr-grpc: 50001/TCP
+	//dapr-internal: 50002/TCP
+	//dapr-metrics: 9090/TCP
+	//requests.get("http://localhost:9090").text 获取指标
+
+	// http   ------>    daprd 3500 <----->  app appPort
+	// grpc  ------->   50001 daprd 50002 <-------> app appPort
 
 	daprHTTP, err := strconv.Atoi(*daprHTTPPort)
 	if err != nil {
-		return nil, fmt.Errorf("error parsing dapr-http-port flag: %w", err)
+		return nil, errors.Wrap(err, "error parsing dapr-http-port flag")
 	}
 
 	daprAPIGRPC, err := strconv.Atoi(*daprAPIGRPCPort)
 	if err != nil {
-		return nil, fmt.Errorf("error parsing dapr-grpc-port flag: %w", err)
+		return nil, errors.Wrap(err, "error parsing dapr-grpc-port flag")
 	}
 
+	// 默认7777
 	profPort, err := strconv.Atoi(*profilePort)
 	if err != nil {
-		return nil, fmt.Errorf("error parsing profile-port flag: %w", err)
+		return nil, errors.Wrap(err, "error parsing profile-port flag")
 	}
 
 	var daprInternalGRPC int
-	if *daprInternalGRPCPort != "" && *daprInternalGRPCPort != "0" {
+	if *daprInternalGRPCPort != "" {
 		daprInternalGRPC, err = strconv.Atoi(*daprInternalGRPCPort)
 		if err != nil {
-			return nil, fmt.Errorf("error parsing dapr-internal-grpc-port: %w", err)
+			return nil, errors.Wrap(err, "error parsing dapr-internal-grpc-port")
 		}
 	} else {
-		daprInternalGRPC, err = freeport.GetFreePort()
+		//返回一个来自操作系统的空闲端口。
+		daprInternalGRPC, err = grpc.GetFreePort()
 		if err != nil {
-			return nil, fmt.Errorf("failed to get free port for internal grpc server: %w", err)
+			return nil, errors.Wrap(err, "failed to get free port for internal grpc server")
 		}
 	}
 
@@ -177,25 +169,18 @@ func FromFlags() (*DaprRuntime, error) {
 	if *daprPublicPort != "" {
 		port, cerr := strconv.Atoi(*daprPublicPort)
 		if cerr != nil {
-			return nil, fmt.Errorf("error parsing dapr-public-port: %w", cerr)
+			return nil, errors.Wrap(cerr, "error parsing dapr-public-port")
 		}
 		publicPort = &port
 	}
 
 	var applicationPort int
 	if *appPort != "" {
+		//appPort
 		applicationPort, err = strconv.Atoi(*appPort)
 		if err != nil {
-			return nil, fmt.Errorf("error parsing app-port: %w", err)
+			return nil, errors.Wrap(err, "error parsing app-port")
 		}
-	}
-
-	if applicationPort == daprHTTP {
-		return nil, fmt.Errorf("the 'dapr-http-port' argument value %d conflicts with 'app-port'", daprHTTP)
-	}
-
-	if applicationPort == daprAPIGRPC {
-		return nil, fmt.Errorf("the 'dapr-grpc-port' argument value %d conflicts with 'app-port'", daprAPIGRPC)
 	}
 
 	var maxRequestBodySize int
@@ -212,15 +197,10 @@ func FromFlags() (*DaprRuntime, error) {
 		readBufferSize = DefaultReadBufferSize
 	}
 
-	var gracefulShutdownDuration time.Duration
-	if *daprGracefulShutdownSeconds < 0 {
-		gracefulShutdownDuration = DefaultGracefulShutdownDuration
-	} else {
-		gracefulShutdownDuration = time.Duration(*daprGracefulShutdownSeconds) * time.Second
-	}
-
+	//
 	placementAddresses := []string{}
 	if *placementServiceHostAddr != "" {
+		// dapr-placement-server.dapr.svc.cluster.local:50005
 		placementAddresses = parsePlacementAddr(*placementServiceHostAddr)
 	}
 
@@ -229,91 +209,30 @@ func FromFlags() (*DaprRuntime, error) {
 		concurrency = *appMaxConcurrency
 	}
 
-	var appProtocol string
-	{
-		p := strings.ToLower(*appProtocolPtr)
-		switch p {
-		case string(HTTPProtocol),
-			string(GRPCProtocol):
-			appProtocol = p
-		case "":
-			appProtocol = string(HTTPProtocol)
-		default:
-			return nil, fmt.Errorf("invalid value for 'app-protocol': %v", *appProtocolPtr)
-		}
+	appPrtcl := string(HTTPProtocol)
+	if *appProtocol != string(HTTPProtocol) {
+		appPrtcl = *appProtocol
 	}
-
+	// [::1],127.0.0.1
 	daprAPIListenAddressList := strings.Split(*daprAPIListenAddresses, ",")
 	if len(daprAPIListenAddressList) == 0 {
 		daprAPIListenAddressList = []string{DefaultAPIListenAddress}
 	}
+	runtimeConfig := NewRuntimeConfig(*appID, placementAddresses, *controlPlaneAddress,
+		*allowedOrigins, *config, *componentsPath,
+		appPrtcl, *mode, daprHTTP, daprInternalGRPC, daprAPIGRPC, daprAPIListenAddressList,
+		publicPort, applicationPort, profPort, *enableProfiling, concurrency, *enableMTLS,
+		*sentryAddress, *appSSL, maxRequestBodySize, *unixDomainSocket, readBufferSize,
+		*daprHTTPStreamRequestBody)
 
-	var healthProbeInterval time.Duration
-	if *appHealthProbeInterval <= 0 {
-		healthProbeInterval = apphealth.DefaultProbeInterval
-	} else {
-		healthProbeInterval = time.Duration(*appHealthProbeInterval) * time.Second
-	}
-
-	var healthProbeTimeout time.Duration
-	if *appHealthProbeTimeout <= 0 {
-		healthProbeTimeout = apphealth.DefaultProbeTimeout
-	} else {
-		healthProbeTimeout = time.Duration(*appHealthProbeTimeout) * time.Millisecond
-	}
-
-	if healthProbeTimeout > healthProbeInterval {
-		return nil, errors.New("value for 'health-probe-timeout' must be smaller than 'health-probe-interval'")
-	}
-
-	// Also check to ensure no overflow with int32
-	var healthThreshold int32
-	if *appHealthThreshold < 1 || int32(*appHealthThreshold+1) < 0 {
-		healthThreshold = apphealth.DefaultThreshold
-	} else {
-		healthThreshold = int32(*appHealthThreshold)
-	}
-
-	runtimeConfig := NewRuntimeConfig(NewRuntimeConfigOpts{
-		ID:                           *appID,
-		PlacementAddresses:           placementAddresses,
-		controlPlaneAddress:          *controlPlaneAddress,
-		AllowedOrigins:               *allowedOrigins,
-		GlobalConfig:                 *config,
-		ComponentsPath:               *componentsPath,
-		AppProtocol:                  appProtocol,
-		Mode:                         *mode,
-		HTTPPort:                     daprHTTP,
-		InternalGRPCPort:             daprInternalGRPC,
-		APIGRPCPort:                  daprAPIGRPC,
-		APIListenAddresses:           daprAPIListenAddressList,
-		PublicPort:                   publicPort,
-		AppPort:                      applicationPort,
-		ProfilePort:                  profPort,
-		EnableProfiling:              *enableProfiling,
-		MaxConcurrency:               concurrency,
-		MTLSEnabled:                  *enableMTLS,
-		SentryAddress:                *sentryAddress,
-		AppSSL:                       *appSSL,
-		MaxRequestBodySize:           maxRequestBodySize,
-		UnixDomainSocket:             *unixDomainSocket,
-		ReadBufferSize:               readBufferSize,
-		GracefulShutdownDuration:     gracefulShutdownDuration,
-		DisableBuiltinK8sSecretStore: *disableBuiltinK8sSecretStore,
-		EnableAppHealthCheck:         *enableAppHealthCheck,
-		AppHealthCheckPath:           *appHealthCheckPath,
-		AppHealthProbeInterval:       healthProbeInterval,
-		AppHealthProbeTimeout:        healthProbeTimeout,
-		AppHealthThreshold:           healthThreshold,
-	})
-
-	// set environment variables
-	// TODO - consider adding host address to runtime config and/or caching result in utils package
+	// 设置环境变量
+	// TODO - 考虑在运行时配置中添加主机地址或在实用程序包中缓存结果
 	host, err := utils.GetHostAddress()
 	if err != nil {
 		log.Warnf("failed to get host address, env variable %s will not be set", env.HostAddress)
 	}
 
+	// 变量存储
 	variables := map[string]string{
 		env.AppID:           *appID,
 		env.AppPort:         *appPort,
@@ -325,99 +244,82 @@ func FromFlags() (*DaprRuntime, error) {
 		env.DaprProfilePort: *profilePort,
 	}
 
-	if err = utils.SetEnvVariables(variables); err != nil {
+	if err = setEnvVariables(variables); err != nil {
 		return nil, err
 	}
 
-	var globalConfig *daprGlobalConfig.Configuration
+	var globalConfig *global_config.Configuration
 	var configErr error
 
+	// daprd之间是否加密通信，enableMTLS 默认false
+	// k8s模式一定要加密
 	if *enableMTLS || *mode == string(modes.KubernetesMode) {
+		//  从环境变量中 获取根证书、证书、私钥
 		runtimeConfig.CertChain, err = security.GetCertChain()
 		if err != nil {
 			return nil, err
 		}
 	}
-
-	// Config and resiliency need the operator client
-	var operatorClient operatorV1.OperatorClient
-	if *mode == string(modes.KubernetesMode) {
-		log.Infof("Initializing the operator client (config: %s)", *config)
-		client, conn, clientErr := client.GetOperatorClient(*controlPlaneAddress, security.TLSServerName, runtimeConfig.CertChain)
-		if clientErr != nil {
-			return nil, clientErr
-		}
-		defer conn.Close()
-		operatorClient = client
-	}
-
-	var accessControlList *daprGlobalConfig.AccessControlList
-	namespace := os.Getenv("NAMESPACE")
-	podName := os.Getenv("POD_NAME")
+	//访问控制列表
+	var accessControlList *global_config.AccessControlList
+	var namespace string
 
 	if *config != "" {
 		switch modes.DaprMode(*mode) {
 		case modes.KubernetesMode:
-			globalConfig, configErr = daprGlobalConfig.LoadKubernetesConfiguration(*config, namespace, podName, operatorClient)
+			//controlPlaneAddress=dapr-api.dapr-system.svc.cluster.local:80
+
+			// 建立一个 控制面的链接   链接的是
+			// 将这个服务的80端口 映射到本地6500端口
+			// kubectl port-forward svc/dapr-api -n dapr-system 6500:80 &
+			client, conn, clientErr := client.GetOperatorClient(*controlPlaneAddress,
+				security.TLSServerName, runtimeConfig.CertChain)
+			if clientErr != nil {
+				return nil, clientErr
+			}
+			defer conn.Close()
+			namespace = os.Getenv("NAMESPACE")
+			//去拿k8s里dapr自定义资源Configuration  appconfig
+			globalConfig, configErr = global_config.LoadKubernetesConfiguration(*config, namespace, client)
 		case modes.StandaloneMode:
-			globalConfig, _, configErr = daprGlobalConfig.LoadStandaloneConfiguration(*config)
+			userHome, err := daprd_debug.Home()
+			if err != nil {
+				log.Fatal(err)
+			}
+			globalConfig, _, configErr = global_config.LoadStandaloneConfiguration(path.Join(userHome, ".dapr/config.yaml"))
 		}
 	}
 
 	if configErr != nil {
-		log.Fatalf("error loading configuration: %s", configErr)
+		log.Fatalf("加载配置出错: %s", configErr)
 	}
 	if globalConfig == nil {
 		log.Info("loading default configuration")
-		globalConfig = daprGlobalConfig.LoadDefaultConfiguration()
+		globalConfig = global_config.LoadDefaultConfiguration()
 	}
 
-	globalConfig.LoadFeatures()
-	if enabledFeatures := globalConfig.EnabledFeatures(); len(enabledFeatures) > 0 {
-		log.Info("Enabled features: " + strings.Join(enabledFeatures, " "))
-	}
-
-	// TODO: Remove once AppHealthCheck feature is finalized
-	if !globalConfig.IsFeatureEnabled(daprGlobalConfig.AppHealthCheck) && *enableAppHealthCheck {
-		log.Warnf("App health checks are a preview feature and require the %s feature flag to be enabled. See https://docs.dapr.io/operations/configuration/preview-features/ on how to enable preview features.", daprGlobalConfig.AppHealthCheck)
-		runtimeConfig.AppHealthCheck = nil
-	}
-
-	// Initialize metrics only if MetricSpec is enabled.
-	if globalConfig.Spec.MetricSpec.Enabled {
-		if mErr := diag.InitMetrics(runtimeConfig.ID, namespace, globalConfig.Spec.MetricSpec.Rules); mErr != nil {
-			log.Errorf(NewInitError(InitFailure, "metrics", mErr).Error())
-		}
-	}
-
-	// Load Resiliency
-	var resiliencyConfigs []*resiliencyV1alpha.Resiliency
-	switch modes.DaprMode(*mode) {
-	case modes.KubernetesMode:
-		resiliencyConfigs = resiliencyConfig.LoadKubernetesResiliency(log, *appID, namespace, operatorClient)
-	case modes.StandaloneMode:
-		resiliencyConfigs = resiliencyConfig.LoadStandaloneResiliency(log, *appID, *componentsPath)
-	}
-	log.Debugf("Found %d resiliency configurations.", len(resiliencyConfigs))
-	resiliencyProvider := resiliencyConfig.FromConfigurations(log, resiliencyConfigs...)
-	log.Info("Resiliency configuration loaded.")
-
+	log.Info("loading daprd accessControlList")
 	accessControlList, err = acl.ParseAccessControlSpec(globalConfig.Spec.AccessControlSpec, string(runtimeConfig.ApplicationProtocol))
 	if err != nil {
 		log.Fatalf(err.Error())
 	}
-
-	// API logging can be enabled for this app or for every app, globally in the config
-	if enableAPILogging != nil {
-		runtimeConfig.EnableAPILogging = *enableAPILogging
-	} else {
-		runtimeConfig.EnableAPILogging = globalConfig.Spec.LoggingSpec.APILogging.Enabled
-	}
-
-	return NewDaprRuntime(runtimeConfig, globalConfig, accessControlList, resiliencyProvider), nil
+	return NewDaprRuntime(runtimeConfig, globalConfig, accessControlList), nil
 }
 
+// ok
+func setEnvVariables(variables map[string]string) error {
+	for key, value := range variables {
+		err := os.Setenv(key, value)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ok
 func parsePlacementAddr(val string) []string {
+	// dapr-placement-server.dapr.svc.cluster.local:50005
 	parsed := []string{}
 	p := strings.Split(val, ",")
 	for _, addr := range p {

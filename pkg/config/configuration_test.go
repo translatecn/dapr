@@ -1,25 +1,15 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package config
 
 import (
-	"reflect"
+	"github.com/stretchr/testify/assert"
+	"os"
 	"sort"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestLoadStandaloneConfiguration(t *testing.T) {
@@ -59,7 +49,7 @@ func TestLoadStandaloneConfiguration(t *testing.T) {
 	}
 
 	t.Run("Parse environment variables", func(t *testing.T) {
-		t.Setenv("DAPR_SECRET", "keepitsecret")
+		os.Setenv("DAPR_SECRET", "keepitsecret")
 		config, _, err := LoadStandaloneConfiguration("./testdata/env_variables_config.yaml")
 		assert.NoError(t, err, "Unexpected error")
 		assert.NotNil(t, config, "Config not loaded as expected")
@@ -100,28 +90,6 @@ func TestMetricSpecForStandAlone(t *testing.T) {
 			config, _, err := LoadStandaloneConfiguration(tc.confFile)
 			assert.NoError(t, err)
 			assert.Equal(t, tc.metricEnabled, config.Spec.MetricSpec.Enabled)
-		})
-	}
-}
-
-func TestComponentsSpecForStandAlone(t *testing.T) {
-	testCases := []struct {
-		name           string
-		confFile       string
-		componentsDeny []string
-	}{
-		{
-			name:           "component deny list",
-			confFile:       "./testdata/components_config.yaml",
-			componentsDeny: []string{"foo.bar", "hello.world/v1"},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			config, _, err := LoadStandaloneConfiguration(tc.confFile)
-			assert.NoError(t, err)
-			assert.True(t, reflect.DeepEqual(tc.componentsDeny, config.Spec.ComponentsSpec.Deny))
 		})
 	}
 }
@@ -325,24 +293,21 @@ func TestContainsKey(t *testing.T) {
 }
 
 func TestFeatureEnabled(t *testing.T) {
-	config := Configuration{
-		Spec: ConfigurationSpec{
-			Features: []FeatureSpec{
-				{
-					Name:    "testEnabled",
-					Enabled: true,
-				},
-				{
-					Name:    "testDisabled",
-					Enabled: false,
-				},
+	t.Run("Test feature enabled is correct", func(t *testing.T) {
+		features := []FeatureSpec{
+			{
+				Name:    "testEnabled",
+				Enabled: true,
 			},
-		},
-	}
-	config.LoadFeatures()
-	assert.True(t, config.IsFeatureEnabled("testEnabled"))
-	assert.False(t, config.IsFeatureEnabled("testDisabled"))
-	assert.False(t, config.IsFeatureEnabled("testMissing"))
+			{
+				Name:    "testDisabled",
+				Enabled: false,
+			},
+		}
+		assert.True(t, IsFeatureEnabled(features, "testEnabled"))
+		assert.False(t, IsFeatureEnabled(features, "testDisabled"))
+		assert.False(t, IsFeatureEnabled(features, "testMissing"))
+	})
 }
 
 func TestFeatureSpecForStandAlone(t *testing.T) {
@@ -375,9 +340,8 @@ func TestFeatureSpecForStandAlone(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			config, _, err := LoadStandaloneConfiguration(tc.confFile)
-			require.NoError(t, err)
-			config.LoadFeatures()
-			assert.Equal(t, tc.featureEnabled, config.IsFeatureEnabled(tc.featureName))
+			assert.NoError(t, err)
+			assert.Equal(t, tc.featureEnabled, IsFeatureEnabled(config.Spec.Features, tc.featureName))
 		})
 	}
 }
@@ -385,33 +349,9 @@ func TestFeatureSpecForStandAlone(t *testing.T) {
 func TestMTLSSpecForStandAlone(t *testing.T) {
 	t.Run("test mtls spec config", func(t *testing.T) {
 		config, _, err := LoadStandaloneConfiguration("./testdata/mtls_config.yaml")
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		assert.True(t, config.Spec.MTLSSpec.Enabled)
 		assert.Equal(t, "25s", config.Spec.MTLSSpec.WorkloadCertTTL)
 		assert.Equal(t, "1h", config.Spec.MTLSSpec.AllowedClockSkew)
-	})
-}
-
-func TestSortMetrics(t *testing.T) {
-	t.Run("metrics overrides metric", func(t *testing.T) {
-		config := &Configuration{
-			Spec: ConfigurationSpec{
-				MetricSpec: MetricSpec{
-					Enabled: true,
-					Rules: []MetricsRule{
-						{
-							Name: "rule",
-						},
-					},
-				},
-				MetricsSpec: MetricSpec{
-					Enabled: false,
-				},
-			},
-		}
-
-		sortMetricsSpec(config)
-		assert.False(t, config.Spec.MetricSpec.Enabled)
-		assert.Equal(t, "rule", config.Spec.MetricSpec.Rules[0].Name)
 	})
 }

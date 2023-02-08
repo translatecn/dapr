@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package main
 
@@ -18,34 +10,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"sync"
 
 	"github.com/gorilla/mux"
-
-	"github.com/dapr/dapr/tests/apps/utils"
 )
 
-const (
-	appPort                       = 3000
-	DaprTestTopicEnvVar           = "DAPR_TEST_TOPIC_NAME"
-	DaprTestCustomPathRouteEnvVar = "DAPR_TEST_CUSTOM_PATH_ROUTE"
-)
-
-var (
-	topicName       = "test-topic"
-	topicCustomPath = "custom-path"
-)
-
-func init() {
-	if envTopicName := os.Getenv(DaprTestTopicEnvVar); len(envTopicName) != 0 {
-		topicName = envTopicName
-	}
-
-	if envCustomPath := os.Getenv(DaprTestCustomPathRouteEnvVar); len(envCustomPath) != 0 {
-		topicCustomPath = envCustomPath
-	}
-}
+const appPort = 3000
 
 type messageBuffer struct {
 	lock            *sync.RWMutex
@@ -98,7 +68,7 @@ func (m *messageBuffer) fail(failedMessage string) bool {
 	return false
 }
 
-var messages = messageBuffer{
+var messages messageBuffer = messageBuffer{
 	lock:            &sync.RWMutex{},
 	successMessages: []string{},
 }
@@ -195,12 +165,9 @@ func testHandler(w http.ResponseWriter, r *http.Request) {
 func appRouter() *mux.Router {
 	router := mux.NewRouter().StrictSlash(true)
 
-	// Log requests and their processing time
-	router.Use(utils.LoggerMiddleware)
-
 	router.HandleFunc("/", indexHandler).Methods("GET")
-	router.HandleFunc(fmt.Sprintf("/%s", topicName), testTopicHandler).Methods("POST", "OPTIONS")
-	router.HandleFunc(fmt.Sprintf("/%s", topicCustomPath), testRoutedTopicHandler).Methods("POST", "OPTIONS")
+	router.HandleFunc("/test-topic", testTopicHandler).Methods("POST", "OPTIONS")
+	router.HandleFunc("/custom-path", testRoutedTopicHandler).Methods("POST", "OPTIONS")
 	router.HandleFunc("/tests/get_received_topics", testHandler).Methods("POST")
 
 	router.Use(mux.CORSMethodMiddleware(router))
@@ -210,5 +177,6 @@ func appRouter() *mux.Router {
 
 func main() {
 	log.Printf("Hello Dapr - listening on http://localhost:%d", appPort)
-	utils.StartServer(appPort, appRouter, true, false)
+
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", appPort), appRouter()))
 }

@@ -1,26 +1,22 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package http
 
-// OutputBindingRequest is the request object to invoke an output binding.
+// OutputBindingRequest 是调用输出绑定的请求对象。
 type OutputBindingRequest struct {
 	Metadata  map[string]string `json:"metadata"`
 	Data      interface{}       `json:"data"`
 	Operation string            `json:"operation"`
+	//	GetOperation    OperationKind = "get"
+	//	CreateOperation OperationKind = "create"
+	//	DeleteOperation OperationKind = "delete"
+	//	ListOperation   OperationKind = "list"
 }
 
-// BulkGetRequest is the request object to get a list of values for multiple keys from a state store.
+// BulkGetRequest 是请求对象，用于从状态存储中获取多个键的值的列表。
 type BulkGetRequest struct {
 	Metadata    map[string]string `json:"metadata"`
 	Keys        []string          `json:"keys"`

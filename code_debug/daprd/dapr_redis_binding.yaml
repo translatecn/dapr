@@ -1,0 +1,98 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: myevent
+  namespace: mesoid
+spec:
+  type: bindings.redis
+  version: v1
+  metadata:
+    - name: consumerGroup
+      value: group1
+    - name: redisHost
+      value: "dapr-redis-svc:45454"
+    - name: redisPassword
+      value: "1234"
+scopes：
+# 限定，此组件只能这些应用使用
+  - app01
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dapr-redis-config
+  namespace: mesoid
+data:
+  redis.conf: |
+    bind 0.0.0.0
+    port 6379
+    requirepass 1234
+    appendonly yes
+    protected-mode no
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dapr-redis
+  namespace: mesoid
+  labels:
+    app: dapr-redis-test
+spec:
+  containers:
+    - name: redis
+      image: redis:latest
+      command:
+        - sh
+        - -c
+        - exec redis-server /usr/local/etc/redis/redis.conf
+      ports:
+        - containerPort: 6379
+      volumeMounts:
+        - name: redis-config
+          mountPath: /usr/local/etc/redis
+  volumes:
+    - name: redis-config
+      configMap:
+        name: dapr-redis-config
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: dapr-redis-svc
+  namespace: mesoid
+  labels:
+    app: dapr-redis-test
+spec:
+  type: NodePort
+  selector:
+    app: dapr-redis-test
+  ports:
+    - protocol: TCP
+      port: 45454
+      targetPort: 6379
+---
+#apiVersion: dapr.io/v1alpha1
+#kind: Component
+#metadata:
+#  name: myevent
+#  namespace: default
+#spec:
+#  type: bindings.kafka
+#  version: v1
+#  metadata:
+#    - name: brokers
+#      value: localhost:9092
+#    - name: topics
+#      value: "topic-a"
+#    - name: publishTopic
+#      value: topic1
+#    - name: consumerGroup
+#      value: app01
+#    - name: publishTopic
+#      value: topic-a
+#    - name: initialOffset
+#      value: "oldest"
+#    - name: authRequired
+#      value: "false"
+#    - name: maxMessageBytes
+#      value: 10240000

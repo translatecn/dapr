@@ -8,7 +8,6 @@ Dapr metric name starts with `dapr_` prefix except for health metrics.
   * [Dapr Placement metrics](#dapr-placement-metrics)
   * [Dapr Sentry metrics](#dapr-sentry-metrics)
   * [Dapr Runtime metrics](#dapr-runtime-metrics)
-  * [Dapr Component metrics](#dapr-component-metrics)
 
 ## Dapr Common metrics
 
@@ -65,14 +64,6 @@ Dapr uses prometheus process and go collectors by default.
 * dapr_runtime_component_init_total: The number of initialized components
 * dapr_runtime_component_init_fail_total: The number of component initialization failures
 
-#### Service Invocation
-
-* dapr_runtime_service_invocation_req_sent_total: The number of remote service invocation requests sent
-* dapr_runtime_service_invocation_req_recv_total: The number of remote service invocation requests received
-* dapr_runtime_service_invocation_res_sent_total: The number of remote service invocation responses sent
-* dapr_runtime_service_invocation_res_recv_total: The number of remote service invocation responses received
-* dapr_runtime_service_invocation_res_recv_latency_ms: The remote service invocation round trip latency
-
 #### Security
 
 * dapr_runtime_mtls_init_total: The number of successful mTLS authenticator initialization.
@@ -90,11 +81,6 @@ Dapr uses prometheus process and go collectors by default.
 * dapr_runtime_actor_activated_failed_total: The number of the actor activation failures.
 * dapr_runtime_actor_deactivated_total: The number of the successful actor deactivation.
 * dapr_runtime_actor_deactivated_failed_total: The number of the failed actor deactivation.
-
-#### Resiliency
-
-* dapr_runtime_resiliency_loaded: The number of resiliency policies loaded.
-* dapr_runtime_resiliency_count: The number of times a resiliency policy has been executed.
 
 ### gRPC monitoring metrics
 
@@ -135,34 +121,3 @@ We support only server side metrics.
 * dapr_http/client/received_bytes: Total bytes received in response bodies (not including headers but including error responses with bodies)
 * dapr_http/client/roundtrip_latency: End-to-end latency
 * dapr_http/client/completed_count: Count of completed requests
-
-## Dapr Component Metrics
-
-### Pub/Sub metrics
-
-* dapr_component_pubsub_ingress_latencies: The consuming app event processing latency
-* dapr_component_pubsub_ingress_count: The number of incoming messages arriving from the pub/sub component
-* dapr_component_pubsub_egress_count: The number of outgoing messages published to the pub/sub component
-* dapr_component_pubsub_egress_latencies: The latency of the response from the pub/sub component
-
-### Bindings metrics
-
-* dapr_component_input_binding_count: The number of incoming events arriving from the input binding component
-* dapr_component_input_binding_latencies: The triggered app event processing latency
-* dapr_component_output_binding_count: The number of operations invoked on the output binding component
-* dapr_component_output_binding_latencies: The latency of the response from the output binding component
-
-### State metrics
-
-* dapr_component_state_count: The number of operations performed on the state component
-* dapr_component_state_latencies: The latency of the response from the state component
-
-### Configuration metrics
-
-* dapr_component_configuration_count: The number of operations performed on the configuration component
-* dapr_component_configuration_latencies: The latency of the response from the configuration component
-
-### Secret metrics
-
-* dapr_component_secret_count: The number of operations performed on the secret component
-* dapr_component_secret_latencies: The latency of the response from the secret component

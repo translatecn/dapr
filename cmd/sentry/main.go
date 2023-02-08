@@ -1,60 +1,60 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package main
 
 import (
 	"flag"
+	sentry_debug "github.com/dapr/dapr/code_debug/sentry"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 	"time"
 
-	"k8s.io/client-go/util/homedir"
+	"github.com/dapr/kit/logger" //ok
 
-	"github.com/dapr/dapr/pkg/buildinfo"
-	"github.com/dapr/dapr/pkg/credentials"
-	"github.com/dapr/dapr/pkg/health"
-	"github.com/dapr/dapr/pkg/metrics"
-	"github.com/dapr/dapr/pkg/sentry"
+	"github.com/dapr/dapr/pkg/credentials" // ok
+	"github.com/dapr/dapr/pkg/fswatcher"   // ok 获取证书文件
+	"github.com/dapr/dapr/pkg/health"      // ok
+	"github.com/dapr/dapr/pkg/metrics"     // ok
+	// 都没有init方法
+	"github.com/dapr/dapr/pkg/sentry" // ok
 	"github.com/dapr/dapr/pkg/sentry/config"
-	"github.com/dapr/dapr/pkg/sentry/monitoring"
-	"github.com/dapr/dapr/pkg/signals"
-	"github.com/dapr/dapr/utils"
-	"github.com/dapr/kit/fswatcher"
-	"github.com/dapr/kit/logger"
+	"github.com/dapr/dapr/pkg/sentry/monitoring" // ok
+	"github.com/dapr/dapr/pkg/signals"           // ok
+	"github.com/dapr/dapr/pkg/version"           // ok
+	_ "net/http/pprof"
 )
 
 var log = logger.NewLogger("dapr.sentry")
 
-//nolint:gosec
 const (
 	defaultCredentialsPath = "/var/run/dapr/credentials"
-	// defaultDaprSystemConfigName is the default resource object name for Dapr System Config.
+	// 自定义资源
+	// defaultDaprSystemConfigName 是Dapr System Config的默认资源对象名称。
 	defaultDaprSystemConfigName = "daprsystem"
 
 	healthzPort = 8080
 )
 
 func main() {
+	go func() {
+		err := http.ListenAndServe("127.0.0.1:9999", nil)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}()
+	err := os.Setenv("KUBERNETES_SERVICE_HOST", "1123213")
+	if err != nil {
+		log.Error(err)
+	}
 	configName := flag.String("config", defaultDaprSystemConfigName, "Path to config file, or name of a configuration object")
 	credsPath := flag.String("issuer-credentials", defaultCredentialsPath, "Path to the credentials directory holding the issuer data")
-	flag.StringVar(&credentials.RootCertFilename, "issuer-ca-filename", credentials.RootCertFilename, "Certificate Authority certificate filename")
-	flag.StringVar(&credentials.IssuerCertFilename, "issuer-certificate-filename", credentials.IssuerCertFilename, "Issuer certificate filename")
-	flag.StringVar(&credentials.IssuerKeyFilename, "issuer-key-filename", credentials.IssuerKeyFilename, "Issuer private key filename")
 	trustDomain := flag.String("trust-domain", "localhost", "The CA trust domain")
-	tokenAudience := flag.String("token-audience", "", "Expected audience for tokens; multiple values can be separated by a comma")
 
 	loggerOptions := logger.DefaultOptions()
 	loggerOptions.AttachCmdFlags(flag.StringVar, flag.BoolVar)
@@ -62,32 +62,23 @@ func main() {
 	metricsExporter := metrics.NewExporter(metrics.DefaultMetricNamespace)
 	metricsExporter.Options().AttachCmdFlags(flag.StringVar, flag.BoolVar)
 
-	var kubeconfig *string
-	if home := homedir.HomeDir(); home != "" {
-		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
-	} else {
-		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
-	}
 	flag.Parse()
-	if err := utils.SetEnvVariables(map[string]string{
-		utils.KubeConfigVar: *kubeconfig,
-	}); err != nil {
-		log.Fatalf("error set env failed:  %s", err.Error())
-	}
+	loggerOptions.SetOutputLevel("debug")
 
-	// Apply options to all loggers
+	// pass
 	if err := logger.ApplyOptionsToLoggers(&loggerOptions); err != nil {
 		log.Fatal(err)
 	}
 
-	log.Infof("starting sentry certificate authority -- version %s -- commit %s", buildinfo.Version(), buildinfo.Commit())
+	log.Infof("starting sentry certificate authority -- version %s -- commit %s", version.Version(), version.Commit())
 	log.Infof("log level set to: %s", loggerOptions.OutputLevel)
 
-	// Initialize dapr metrics exporter
+	// pass
 	if err := metricsExporter.Init(); err != nil {
+
 		log.Fatal(err)
 	}
-
+	// pass
 	if err := monitoring.InitMetrics(); err != nil {
 		log.Fatal(err)
 	}
@@ -95,12 +86,12 @@ func main() {
 	issuerCertPath := filepath.Join(*credsPath, credentials.IssuerCertFilename)
 	issuerKeyPath := filepath.Join(*credsPath, credentials.IssuerKeyFilename)
 	rootCertPath := filepath.Join(*credsPath, credentials.RootCertFilename)
-
+	//_, _ = config.GetDefaultConfig(*configName)
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
-	runCtx := signals.Context()
-	config, err := config.FromConfigName(*configName)
+	ctx := signals.Context()
+	config, err := config.FromConfigName(*configName) // 会定义 kubeconfig 的环境变量 与  ca.Run 【更改获取k8s客户端】 会重复定义
 	if err != nil {
 		log.Warn(err)
 	}
@@ -108,62 +99,47 @@ func main() {
 	config.IssuerKeyPath = issuerKeyPath
 	config.RootCertPath = rootCertPath
 	config.TrustDomain = *trustDomain
-	if *tokenAudience != "" {
-		config.TokenAudience = tokenAudience
-	}
-
+	sentry_debug.PRE(&config)
 	watchDir := filepath.Dir(config.IssuerCertPath)
 
 	ca := sentry.NewSentryCA()
 
 	log.Infof("starting watch on filesystem directory: %s", watchDir)
-
 	issuerEvent := make(chan struct{})
+	ready := make(chan bool)
+
+	// 启动CA服务 grpc通信
+	go ca.Run(ctx, config, ready)
+
+	<-ready
+	go fswatcher.Watch(ctx, watchDir, issuerEvent)
 
 	go func() {
-		// Restart the server when the issuer credentials change
-		var restart <-chan time.Time
-		for {
-			select {
-			case <-issuerEvent:
-				monitoring.IssuerCertChanged()
-				log.Debug("received issuer credentials changed signal")
-				// Batch all signals within 2s of each other
-				if restart == nil {
-					restart = time.After(2 * time.Second)
-				}
-			case <-restart:
-				log.Warn("issuer credentials changed; reloading")
-				innerErr := ca.Restart(runCtx, config)
-				if innerErr != nil {
-					log.Fatalf("failed to restart sentry server: %s", innerErr)
-				}
-				restart = nil
-			}
+		for range issuerEvent {
+			// 指标变更
+			monitoring.IssuerCertChanged()
+			log.Warn("发行人证书已更改。 重新加载")
+			ca.Restart(ctx, config)
 		}
 	}()
 
-	// Start the health server in background
 	go func() {
 		healthzServer := health.NewServer(log)
 		healthzServer.Ready()
 
-		if innerErr := healthzServer.Run(runCtx, healthzPort); innerErr != nil {
-			log.Fatalf("failed to start healthz server: %s", innerErr)
+		err := healthzServer.Run(ctx, healthzPort)
+		if err != nil {
+			log.Fatalf("failed to start healthz server: %s", err)
 		}
 	}()
-
-	// Start the server in background
-	err = ca.Start(runCtx, config)
-	if err != nil {
-		log.Fatalf("failed to restart sentry server: %s", err)
-	}
-
-	// Watch for changes in the watchDir
-	// This also blocks until runCtx is canceled
-	fswatcher.Watch(runCtx, watchDir, issuerEvent)
-
+	<-stop
+	// 收到终止信号，直接等5秒 等其他goroutinue关闭
+	// code_debug/sentry/signal_test.go:13
 	shutdownDuration := 5 * time.Second
 	log.Infof("allowing %s for graceful shutdown to complete", shutdownDuration)
 	<-time.After(shutdownDuration)
 }
+
+// 8080 健康检查
+// 50001
+// 9090 指标采集

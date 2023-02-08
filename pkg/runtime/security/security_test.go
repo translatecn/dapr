@@ -1,12 +1,13 @@
 package security
 
 import (
+	"os"
 	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
-	sentryConsts "github.com/dapr/dapr/pkg/sentry/consts"
+	"github.com/dapr/dapr/pkg/sentry/certs"
 )
 
 var testRootCert = `-----BEGIN CERTIFICATE-----
@@ -23,9 +24,14 @@ Iklq0JnMgJU7nS+VpVvlgBN8
 
 func TestGetTrustAnchors(t *testing.T) {
 	t.Run("invalid root cert", func(t *testing.T) {
-		t.Setenv(sentryConsts.TrustAnchorsEnvVar, "111")
-		t.Setenv(sentryConsts.CertChainEnvVar, "111")
-		t.Setenv(sentryConsts.CertKeyEnvVar, "111")
+		os.Setenv(certs.TrustAnchorsEnvVar, "111")
+		os.Setenv(certs.CertChainEnvVar, "111")
+		os.Setenv(certs.CertKeyEnvVar, "111")
+		defer func() {
+			os.Unsetenv(certs.TrustAnchorsEnvVar)
+			os.Unsetenv(certs.CertChainEnvVar)
+			os.Unsetenv(certs.CertKeyEnvVar)
+		}()
 
 		certChain, _ := GetCertChain()
 		caPool, err := CertPool(certChain.Cert)
@@ -34,9 +40,14 @@ func TestGetTrustAnchors(t *testing.T) {
 	})
 
 	t.Run("valid root cert", func(t *testing.T) {
-		t.Setenv(sentryConsts.TrustAnchorsEnvVar, testRootCert)
-		t.Setenv(sentryConsts.CertChainEnvVar, "111")
-		t.Setenv(sentryConsts.CertKeyEnvVar, "111")
+		os.Setenv(certs.TrustAnchorsEnvVar, testRootCert)
+		os.Setenv(certs.CertChainEnvVar, "111")
+		os.Setenv(certs.CertKeyEnvVar, "111")
+		defer func() {
+			os.Unsetenv(certs.TrustAnchorsEnvVar)
+			os.Unsetenv(certs.CertChainEnvVar)
+			os.Unsetenv(certs.CertKeyEnvVar)
+		}()
 
 		certChain, err := GetCertChain()
 		assert.Nil(t, err)
@@ -66,9 +77,14 @@ func TestGenerateSidecarCSR(t *testing.T) {
 }
 
 func TestInitSidecarAuthenticator(t *testing.T) {
-	t.Setenv(sentryConsts.TrustAnchorsEnvVar, testRootCert)
-	t.Setenv(sentryConsts.CertChainEnvVar, "111")
-	t.Setenv(sentryConsts.CertKeyEnvVar, "111")
+	os.Setenv(certs.TrustAnchorsEnvVar, testRootCert)
+	os.Setenv(certs.CertChainEnvVar, "111")
+	os.Setenv(certs.CertKeyEnvVar, "111")
+	defer func() {
+		os.Unsetenv(certs.TrustAnchorsEnvVar)
+		os.Unsetenv(certs.CertChainEnvVar)
+		os.Unsetenv(certs.CertKeyEnvVar)
+	}()
 
 	certChain, _ := GetCertChain()
 	_, err := GetSidecarAuthenticator("localhost:5050", certChain)

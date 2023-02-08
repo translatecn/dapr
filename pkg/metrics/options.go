@@ -1,30 +1,25 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package metrics
 
 import (
+	"github.com/dapr/dapr/utils"
 	"strconv"
 )
 
 const (
-	defaultMetricsPort    = "9090"
+	//defaultMetricsPort    = "9090"
 	defaultMetricsEnabled = true
 )
 
-// Options defines the sets of options for Dapr logging.
+var defaultMetricsPort, _ = utils.GetAvailablePort()
+
+// Options 定义用于Dapr日志记录的选项集。
 type Options struct {
-	// OutputLevel is the level of logging
+	// OutputLevel是日志级别
 	MetricsEnabled bool
 
 	Port string
@@ -37,7 +32,7 @@ func defaultMetricOptions() *Options {
 	}
 }
 
-// MetricsPort gets metrics port.
+// MetricsPort 获取指标的端口
 func (o *Options) MetricsPort() uint64 {
 	port, err := strconv.ParseUint(o.Port, 10, 64)
 	if err != nil {
@@ -49,10 +44,10 @@ func (o *Options) MetricsPort() uint64 {
 }
 
 // AttachCmdFlags attaches metrics options to command flags.
+// 交由外部统一parse
 func (o *Options) AttachCmdFlags(
 	stringVar func(p *string, name string, value string, usage string),
-	boolVar func(p *bool, name string, value bool, usage string),
-) {
+	boolVar func(p *bool, name string, value bool, usage string)) {
 	stringVar(
 		&o.Port,
 		"metrics-port",
@@ -67,8 +62,7 @@ func (o *Options) AttachCmdFlags(
 
 // AttachCmdFlag attaches single metrics option to command flags.
 func (o *Options) AttachCmdFlag(
-	stringVar func(p *string, name string, value string, usage string),
-) {
+	stringVar func(p *string, name string, value string, usage string)) {
 	stringVar(
 		&o.Port,
 		"metrics-port",

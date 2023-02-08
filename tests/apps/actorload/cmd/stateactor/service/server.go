@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package service
 
@@ -24,9 +16,9 @@ import (
 	"strings"
 	"sync"
 
-	cl "github.com/dapr/dapr/tests/apps/actorload/pkg/actor/client"
-	httpClient "github.com/dapr/dapr/tests/apps/actorload/pkg/actor/client/http"
-	rt "github.com/dapr/dapr/tests/apps/actorload/pkg/actor/runtime"
+	cl "actorload/pkg/actor/client"
+	http_client "actorload/pkg/actor/client/http"
+	actor_rt "actorload/pkg/actor/runtime"
 
 	"github.com/go-chi/chi"
 )
@@ -41,7 +33,7 @@ type ActorService struct {
 
 	activeActors sync.Map
 	actorClient  cl.ActorClient
-	config       rt.DaprConfig
+	config       actor_rt.DaprConfig
 
 	activationHandler   ActorActivationHandler
 	deactivationHandler ActorActivationHandler
@@ -49,11 +41,11 @@ type ActorService struct {
 	invocationMap map[string]ActorInvokeFn
 }
 
-func NewActorService(port int, config *rt.DaprConfig) *ActorService {
-	var daprConfig rt.DaprConfig
+func NewActorService(port int, config *actor_rt.DaprConfig) *ActorService {
+	var daprConfig actor_rt.DaprConfig
 
 	if config == nil {
-		daprConfig = rt.DaprConfig{
+		daprConfig = actor_rt.DaprConfig{
 			Entities:                []string{},
 			ActorIdleTimeout:        "60m",
 			ActorScanInterval:       "10s",
@@ -67,7 +59,7 @@ func NewActorService(port int, config *rt.DaprConfig) *ActorService {
 	return &ActorService{
 		address:             fmt.Sprintf("127.0.0.1:%d", port),
 		server:              nil,
-		actorClient:         httpClient.NewClient(),
+		actorClient:         http_client.NewClient(),
 		invocationMap:       map[string]ActorInvokeFn{},
 		config:              daprConfig,
 		activationHandler:   nil,
@@ -98,7 +90,7 @@ func (s *ActorService) onHealthz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *ActorService) router() http.Handler {
-	r := chi.NewRouter()
+	var r = chi.NewRouter()
 	r.Get("/dapr/config", s.onConfig)
 	r.Get("/healthz", s.onHealthz)
 

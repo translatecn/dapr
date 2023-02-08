@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package raft
 
@@ -17,14 +9,12 @@ import (
 	"github.com/hashicorp/raft"
 )
 
-// snapshot is used to provide a snapshot of the current
-// state in a way that can be accessed concurrently with operations
-// that may modify the live state.
+// snapshot 是用来提供当前状态的快照，可以与可能修改实时状态的操作同时访问。可能修改实时状态的操作同时访问。
 type snapshot struct {
 	state *DaprHostMemberState
 }
 
-// Persist saves the FSM snapshot out to the given sink.
+// Persist 将FSM快照保存到给定的目标中。
 func (s *snapshot) Persist(sink raft.SnapshotSink) error {
 	if err := s.state.persist(sink); err != nil {
 		sink.Cancel()
@@ -33,6 +23,7 @@ func (s *snapshot) Persist(sink raft.SnapshotSink) error {
 	return sink.Close()
 }
 
-// Release releases the state storage resource. No-Ops because we use the
-// in-memory state.
+// Release 释放状态存储资源。No-Ops，因为我们使用 在内存中的状态。
 func (s *snapshot) Release() {}
+
+var _ raft.FSMSnapshot = &snapshot{}

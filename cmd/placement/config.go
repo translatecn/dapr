@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package main
 
@@ -19,12 +11,10 @@ import (
 
 	"github.com/dapr/kit/logger"
 
-	"github.com/dapr/dapr/pkg/credentials"
 	"github.com/dapr/dapr/pkg/metrics"
 	"github.com/dapr/dapr/pkg/placement/raft"
 )
 
-//nolint:gosec
 const (
 	defaultCredentialsPath   = "/var/run/dapr/credentials"
 	defaultHealthzPort       = 8080
@@ -33,22 +23,22 @@ const (
 )
 
 type config struct {
-	// Raft protocol configurations
+	// Raft 协议配置
 	raftID           string
 	raftPeerString   string
 	raftPeers        []raft.PeerInfo
 	raftInMemEnabled bool
 	raftLogStorePath string
 
-	// Placement server configurations
+	// Placement server 配置
 	placementPort int
 	healthzPort   int
 	certChainPath string
 	tlsEnabled    bool
 
-	replicationFactor int
+	replicationFactor int // 复制因子
 
-	// Log and metrics configurations
+	// 日志、指标 配置
 	loggerOptions   logger.Options
 	metricsExporter metrics.Exporter
 }
@@ -59,12 +49,12 @@ func newConfig() *config {
 		raftID:           "dapr-placement-0",
 		raftPeerString:   "dapr-placement-0=127.0.0.1:8201",
 		raftPeers:        []raft.PeerInfo{},
-		raftInMemEnabled: true,
+		raftInMemEnabled: true,// 先设置为TRUE
 		raftLogStorePath: "",
 
-		placementPort: defaultPlacementPort,
-		healthzPort:   defaultHealthzPort,
-		certChainPath: defaultCredentialsPath,
+		placementPort: defaultPlacementPort,   // 50005
+		healthzPort:   defaultHealthzPort,     // 8080
+		certChainPath: defaultCredentialsPath, // /var/run/dapr/credentials
 		tlsEnabled:    false,
 	}
 
@@ -78,10 +68,6 @@ func newConfig() *config {
 	flag.BoolVar(&cfg.tlsEnabled, "tls-enabled", cfg.tlsEnabled, "Should TLS be enabled for the placement gRPC server")
 	flag.IntVar(&cfg.replicationFactor, "replicationFactor", defaultReplicationFactor, "sets the replication factor for actor distribution on vnodes")
 
-	flag.StringVar(&credentials.RootCertFilename, "issuer-ca-filename", credentials.RootCertFilename, "Certificate Authority certificate filename")
-	flag.StringVar(&credentials.IssuerCertFilename, "issuer-certificate-filename", credentials.IssuerCertFilename, "Issuer certificate filename")
-	flag.StringVar(&credentials.IssuerKeyFilename, "issuer-key-filename", credentials.IssuerKeyFilename, "Issuer private key filename")
-
 	cfg.loggerOptions = logger.DefaultOptions()
 	cfg.loggerOptions.AttachCmdFlags(flag.StringVar, flag.BoolVar)
 
@@ -91,7 +77,7 @@ func newConfig() *config {
 	flag.Parse()
 
 	cfg.raftPeers = parsePeersFromFlag(cfg.raftPeerString)
-	if cfg.raftLogStorePath != "" {
+	if cfg.raftLogStorePath != "" {// 如果没有设置存储路径,则构建基于内存的存储
 		cfg.raftInMemEnabled = false
 	}
 
@@ -99,7 +85,7 @@ func newConfig() *config {
 }
 
 func parsePeersFromFlag(val string) []raft.PeerInfo {
-	peers := []raft.PeerInfo{}
+	var peers []raft.PeerInfo
 
 	p := strings.Split(val, ",")
 	for _, addr := range p {

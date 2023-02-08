@@ -13,12 +13,13 @@ const (
 	topicSeparator     = ","
 )
 
-// GetScopedTopics returns a list of scoped topics for a given application from a Pub/Sub
-// Component properties.
+
+// GetScopedTopics 从Pub/Sub组件属性中返回一个给定应用程序的范围内主题的列表。
+//"dp-61c2cb20562850d49d47d1c7-executorapp=a,b,c,d;"
 func GetScopedTopics(scope, appID string, metadata map[string]string) []string {
 	var (
 		existM = map[string]struct{}{}
-		topics = []string{}
+		topics []string
 	)
 
 	if val, ok := metadata[scope]; ok && val != "" {
@@ -26,7 +27,7 @@ func GetScopedTopics(scope, appID string, metadata map[string]string) []string {
 		apps := strings.Split(val, appsSeparator)
 		for _, a := range apps {
 			appTopics := strings.Split(a, appSeparator)
-			if len(appTopics) < 2 {
+			if len(appTopics) == 0 {
 				continue
 			}
 
@@ -47,11 +48,11 @@ func GetScopedTopics(scope, appID string, metadata map[string]string) []string {
 	return topics
 }
 
-// GetAllowedTopics return the all topics list of params allowedTopics.
+// GetAllowedTopics 返回params allowedTopics的所有主题列表。
 func GetAllowedTopics(metadata map[string]string) []string {
 	var (
 		existM = map[string]struct{}{}
-		topics = []string{}
+		topics []string
 	)
 
 	if val, ok := metadata[AllowedTopics]; ok && val != "" {

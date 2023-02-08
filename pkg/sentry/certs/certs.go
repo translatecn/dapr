@@ -2,50 +2,65 @@ package certs
 
 import (
 	"crypto/ecdsa"
-	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
-	"errors"
-	"fmt"
+
+	"github.com/pkg/errors"
 )
 
 const (
-	BlockTypeCertificate     = "CERTIFICATE"
-	BlockTypeECPrivateKey    = "EC PRIVATE KEY"
-	BlockTypePKCS1PrivateKey = "RSA PRIVATE KEY"
-	BlockTypePKCS8PrivateKey = "PRIVATE KEY"
+	Certificate     = "CERTIFICATE"
+	ECPrivateKey    = "EC PRIVATE KEY"
+	RSAPrivateKey   = "RSA PRIVATE KEY"
+	PKCS8PrivateKey = "PRIVATE KEY"
 )
 
-// Credentials holds a certificate and private key.
+// PrivateKey 包裹一个EC或RSA私钥。
+type PrivateKey struct {
+	Type string
+	Key  interface{}
+}
+
+// Credentials 持有一个证书、私钥和信任链。
 type Credentials struct {
-	PrivateKey  interface{}
+	PrivateKey  *PrivateKey
 	Certificate *x509.Certificate
 }
 
-// DecodePEMKey takes a key PEM byte array and returns an object that represents
-// either an RSA or EC private key.
-func DecodePEMKey(key []byte) (interface{}, error) {
+// DecodePEMKey 接收一个密钥PEM字节数组，并返回一个代表PrivateKey的密钥。RSA或EC私钥。
+func DecodePEMKey(key []byte) (*PrivateKey, error) {
 	block, _ := pem.Decode(key)
 	if block == nil {
 		return nil, errors.New("key is not PEM encoded")
 	}
 	switch block.Type {
-	case BlockTypeECPrivateKey:
-		return x509.ParseECPrivateKey(block.Bytes)
-	case BlockTypePKCS1PrivateKey:
-		return x509.ParsePKCS1PrivateKey(block.Bytes)
-	case BlockTypePKCS8PrivateKey:
-		return x509.ParsePKCS8PrivateKey(block.Bytes)
+	case ECPrivateKey:
+		k, err := x509.ParseECPrivateKey(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		return &PrivateKey{Type: ECPrivateKey, Key: k}, nil
+	case RSAPrivateKey:
+		k, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		return &PrivateKey{Type: RSAPrivateKey, Key: k}, nil
+	case PKCS8PrivateKey:
+		k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		return &PrivateKey{Type: PKCS8PrivateKey, Key: k}, nil
 	default:
-		return nil, fmt.Errorf("unsupported block type %s", block.Type)
+		return nil, errors.Errorf("unsupported block type %s", block.Type)
 	}
 }
 
-// DecodePEMCertificates takes a PEM-encoded x509 certificates byte array and returns
-// all certificates in a slice of x509.Certificate objects.
+// DecodePEMCertificates 接收一个PEM编码的x509证书字节数组，并返回 一个x509证书和区块字节数组。
 func DecodePEMCertificates(crtb []byte) ([]*x509.Certificate, error) {
 	certs := []*x509.Certificate{}
 	for len(crtb) > 0 {
@@ -69,14 +84,14 @@ func decodeCertificatePEM(crtb []byte) (*x509.Certificate, []byte, error) {
 	if block == nil {
 		return nil, crtb, errors.New("invalid PEM certificate")
 	}
-	if block.Type != BlockTypeCertificate {
+	if block.Type != Certificate {
 		return nil, nil, nil
 	}
 	c, err := x509.ParseCertificate(block.Bytes)
 	return c, crtb, err
 }
 
-// PEMCredentialsFromFiles takes a path for a key/cert pair and returns a validated Credentials wrapper.
+// PEMCredentialsFromFiles 接收一个密钥/证书对的数据，并返回一个带有信任链的有效Credentials包装器。
 func PEMCredentialsFromFiles(certPem, keyPem []byte) (*Credentials, error) {
 	pk, err := DecodePEMKey(keyPem)
 	if err != nil {
@@ -105,26 +120,16 @@ func PEMCredentialsFromFiles(certPem, keyPem []byte) (*Credentials, error) {
 	return creds, nil
 }
 
-func matchCertificateAndKey(pk interface{}, cert *x509.Certificate) bool {
-	switch key := pk.(type) {
-	case *ecdsa.PrivateKey:
-		if cert.PublicKeyAlgorithm != x509.ECDSA {
-			return false
-		}
+func matchCertificateAndKey(pk *PrivateKey, cert *x509.Certificate) bool {
+	switch pk.Type {
+	case ECPrivateKey:
+		key := pk.Key.(*ecdsa.PrivateKey)
 		pub, ok := cert.PublicKey.(*ecdsa.PublicKey)
 		return ok && pub.X.Cmp(key.X) == 0 && pub.Y.Cmp(key.Y) == 0
-	case *rsa.PrivateKey:
-		if cert.PublicKeyAlgorithm != x509.RSA {
-			return false
-		}
+	case RSAPrivateKey:
+		key := pk.Key.(*rsa.PrivateKey)
 		pub, ok := cert.PublicKey.(*rsa.PublicKey)
 		return ok && pub.N.Cmp(key.N) == 0 && pub.E == key.E
-	case ed25519.PrivateKey:
-		if cert.PublicKeyAlgorithm != x509.Ed25519 {
-			return false
-		}
-		pub, ok := cert.PublicKey.(ed25519.PublicKey)
-		return ok && pub.Equal(key.Public())
 	default:
 		return false
 	}
@@ -138,7 +143,7 @@ func certPoolFromCertificates(certs []*x509.Certificate) *x509.CertPool {
 	return pool
 }
 
-// CertPoolFromPEMString returns a CertPool from a PEM encoded certificates string.
+// CertPoolFromPEMString 从PEM编码的证书字符串中返回一个CertPool。
 func CertPoolFromPEM(certPem []byte) (*x509.CertPool, error) {
 	certs, err := DecodePEMCertificates(certPem)
 	if err != nil {
@@ -151,8 +156,7 @@ func CertPoolFromPEM(certPem []byte) (*x509.CertPool, error) {
 	return certPoolFromCertificates(certs), nil
 }
 
-// ParsePemCSR constructs a x509 Certificate Request using the
-// given PEM-encoded certificate signing request.
+// ParsePemCSR 构建一个x509证书请求，使用 给定的PEM编码的证书签署请求。
 func ParsePemCSR(csrPem []byte) (*x509.CertificateRequest, error) {
 	block, _ := pem.Decode(csrPem)
 	if block == nil {
@@ -160,12 +164,15 @@ func ParsePemCSR(csrPem []byte) (*x509.CertificateRequest, error) {
 	}
 	csr, err := x509.ParseCertificateRequest(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse X.509 certificate signing request: %w", err)
+		return nil, errors.Wrap(err, "failed to parse X.509 certificate signing request")
 	}
 	return csr, nil
 }
 
-// GenerateECPrivateKey returns a new EC Private Key.
+// GenerateECPrivateKey 返回一个新的EC私钥。
 func GenerateECPrivateKey() (*ecdsa.PrivateKey, error) {
 	return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 }
+
+//  关于证书这方面的知识
+//  https://github.com/bigwhite/experiments/tree/master/gohttps

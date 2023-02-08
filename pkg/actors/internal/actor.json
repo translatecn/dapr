@@ -1,0 +1,29 @@
+{
+  "version": "v1",
+  "entries": {
+    "actor_type_a": {
+      "sortedSetRing": [
+        1,2,3,4,5,6,7,8,9
+      ],
+      "hosts": {
+        "1": "host-a",
+        "2": "host-a",
+        "3": "host-a",
+        "4": "host-b",
+        "5": "host-b",
+        "6": "host-b",
+        "7": "host-c",
+        "8": "host-c",
+        "9": "host-c"
+      },
+      "loadMap": {
+        "host-a": {
+          "name": "localhost",
+          "port":5000,
+          "load": 0.6,
+          "appid": "xxx"
+        }
+      }
+    }
+  }
+}

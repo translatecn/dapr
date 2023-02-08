@@ -2,13 +2,8 @@ package sentry
 
 import (
 	"context"
-	"crypto/x509"
-	"encoding/pem"
-	"errors"
-	"fmt"
-	"sync"
-	"time"
-
+	"github.com/dapr/dapr/code_debug/replace"
+	sentry_debug "github.com/dapr/dapr/code_debug/sentry"
 	"github.com/dapr/dapr/pkg/sentry/ca"
 	"github.com/dapr/dapr/pkg/sentry/config"
 	"github.com/dapr/dapr/pkg/sentry/identity"
@@ -17,184 +12,97 @@ import (
 	k8s "github.com/dapr/dapr/pkg/sentry/kubernetes"
 	"github.com/dapr/dapr/pkg/sentry/monitoring"
 	"github.com/dapr/dapr/pkg/sentry/server"
-	"github.com/dapr/kit/logger"
+	"github.com/dapr/kit/logger" // ok
+	raw_k8s "k8s.io/client-go/kubernetes"
 )
 
 var log = logger.NewLogger("dapr.sentry")
 
 type CertificateAuthority interface {
-	Start(context.Context, config.SentryConfig) error
-	Stop()
-	Restart(context.Context, config.SentryConfig) error
+	Run(context.Context, config.SentryConfig, chan bool)
+	Restart(ctx context.Context, conf config.SentryConfig)
 }
 
 type sentry struct {
-	conf        config.SentryConfig
-	ctx         context.Context
-	cancel      context.CancelFunc
-	server      server.CAServer
-	restartLock sync.Mutex
-	running     chan bool
-	stopping    chan bool
+	server    server.CAServer
+	reloading bool
 }
 
-// NewSentryCA returns a new Sentry Certificate Authority instance.
+// NewSentryCA  返回一个Sentry认证的实例
 func NewSentryCA() CertificateAuthority {
-	return &sentry{
-		running: make(chan bool, 1),
-	}
+	return &sentry{}
 }
 
-// Start the server in background.
-func (s *sentry) Start(ctx context.Context, conf config.SentryConfig) error {
-	// If the server is already running, return an error
-	select {
-	case s.running <- true:
-	default:
-		return errors.New("CertificateAuthority server is already running")
-	}
-
-	// Create the CA server
-	s.conf = conf
-	certAuth, v := s.createCAServer()
-
-	// Start the server in background
-	s.ctx, s.cancel = context.WithCancel(ctx)
-	go s.run(certAuth, v)
-
-	// Wait 100ms to ensure a clean startup
-	time.Sleep(100 * time.Millisecond)
-
-	return nil
-}
-
-// Loads the trust anchors and issuer certs, then creates a new CA.
-func (s *sentry) createCAServer() (ca.CertificateAuthority, identity.Validator) {
+// Run 加载信任锚和颁发者证书，创建新的CA并运行CA服务器。
+func (s *sentry) Run(ctx context.Context, conf config.SentryConfig, readyCh chan bool) {
 	// Create CA
-	certAuth, authorityErr := ca.NewCertificateAuthority(s.conf)
-	if authorityErr != nil {
-		log.Fatalf("error getting certificate authority: %s", authorityErr)
+	certAuth, err := ca.NewCertificateAuthority(conf)
+	if err != nil {
+		log.Fatalf("error getting certificate authority: %s", err)
 	}
 	log.Info("certificate authority loaded")
 
-	// Load the trust bundle
-	trustStoreErr := certAuth.LoadOrStoreTrustBundle()
-	if trustStoreErr != nil {
-		log.Fatalf("error loading trust root bundle: %s", trustStoreErr)
+	// 加载信任包
+	err = certAuth.LoadOrStoreTrustBundle()
+	if err != nil {
+		log.Fatalf("error loading trust root bundle: %s", err)
 	}
-	certExpiry := certAuth.GetCACertBundle().GetIssuerCertExpiry()
-	if certExpiry == nil {
-		log.Fatalf("error loading trust root bundle: missing certificate expiry")
-	} else {
-		// Need to be in an else block for the linter
-		log.Infof("trust root bundle loaded. issuer cert expiry: %s", certExpiry.String())
-	}
-	monitoring.IssuerCertExpiry(certExpiry)
+	log.Infof("trust root bundle loaded. issuer cert expiry: %s", certAuth.GetCACertBundle().GetIssuerCertExpiry().String())
+	//记录根证书过期时间
+	monitoring.IssuerCertExpiry(certAuth.GetCACertBundle().GetIssuerCertExpiry())
 
-	// Create identity validator
-	v, validatorErr := s.createValidator()
-	if validatorErr != nil {
-		log.Fatalf("error creating validator: %s", validatorErr)
+	// 创建身份验证器
+	v, err := createValidator()
+	if err != nil {
+		log.Fatalf("error creating validator: %s", err)
 	}
 	log.Info("validator created")
 
-	return certAuth, v
-}
-
-// Runs the CA server.
-// This method blocks until the server is shut down.
-func (s *sentry) run(certAuth ca.CertificateAuthority, v identity.Validator) {
+	// 返回一个运行gRPC服务器的新CA服务器。
 	s.server = server.NewCAServer(certAuth, v)
 
-	// In background, watch for the root certificate's expiration
-	go watchCertExpiry(s.ctx, certAuth)
-
-	// Watch for context cancelation to stop the server
+	// 启停启停，这个goroutinue 会不会变得很多
 	go func() {
-		<-s.ctx.Done()
-		s.server.Shutdown()
-		close(s.running)
-		s.running = make(chan bool, 1)
-		if s.stopping != nil {
-			close(s.stopping)
-		}
+		<-ctx.Done()
+		log.Info("sentry certificate authority is shutting down")
+		s.server.Shutdown() // nolint: errcheck
 	}()
+	// 启停启停 只有一个 这个goroutinue 会跑到当前代码，由于  reloading
+	if readyCh != nil {
+		readyCh <- true
+		s.reloading = false
+	}
 
-	// Start the server; this is a blocking call
-	log.Infof("sentry certificate authority is running, protecting y'all")
-	serverRunErr := s.server.Run(s.conf.Port, certAuth.GetCACertBundle())
-	if serverRunErr != nil {
-		log.Fatalf("error starting gRPC server: %s", serverRunErr)
+	log.Infof("sentry 认证机构正在运行，保护你们的安全")
+	err = s.server.Run(conf.Port, certAuth.GetCACertBundle())
+	if err != nil {
+		log.Fatalf("error starting gRPC server: %s", err)
 	}
 }
 
-// Stop the server.
-func (s *sentry) Stop() {
-	log.Info("sentry certificate authority is shutting down")
-	if s.cancel != nil {
-		s.stopping = make(chan bool)
-		s.cancel()
-		<-s.stopping
-		s.stopping = nil
-	}
-}
-
-// Watches certificates' expiry and shows an error message when they're nearing expiration time.
-// This is a blocking method that should be run in its own goroutine.
-func watchCertExpiry(ctx context.Context, certAuth ca.CertificateAuthority) {
-	log.Debug("starting root certificate expiration watcher")
-	certExpiryCheckTicker := time.NewTicker(time.Hour)
-	for {
-		select {
-		case <-certExpiryCheckTicker.C:
-			caCrt := certAuth.GetCACertBundle().GetRootCertPem()
-			block, _ := pem.Decode(caCrt)
-			cert, certParseErr := x509.ParseCertificate(block.Bytes)
-			if certParseErr != nil {
-				log.Warn("could not determine Dapr root certificate expiration time")
-				break
-			}
-			if cert.NotAfter.Before(time.Now().UTC()) {
-				log.Warn("Dapr root certificate expiration warning: certificate has expired.")
-				break
-			}
-			if (cert.NotAfter.Add(-30 * 24 * time.Hour)).Before(time.Now().UTC()) {
-				expiryDurationHours := int(cert.NotAfter.Sub(time.Now().UTC()).Hours())
-				log.Warnf("Dapr root certificate expiration warning: certificate expires in %d days and %d hours", expiryDurationHours/24, expiryDurationHours%24)
-			} else {
-				validity := cert.NotAfter.Sub(time.Now().UTC())
-				log.Debugf("Dapr root certificate is still valid for %s", validity.String())
-			}
-		case <-ctx.Done():
-			log.Debug("terminating root certificate expiration watcher")
-			certExpiryCheckTicker.Stop()
-			return
-		}
-	}
-}
-
-func (s *sentry) createValidator() (identity.Validator, error) {
+func createValidator() (identity.Validator, error) {
 	if config.IsKubernetesHosted() {
-		// we're in Kubernetes, create client and init a new serviceaccount token validator
-		kubeClient, err := k8s.GetClient()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create kubernetes client: %w", err)
+		//  我们在Kubernetes中，创建客户端并启动一个新的服务账户令牌验证器
+		// 此处改用加载本地配置文件 ~/.kube/config
+		var kubeClient *raw_k8s.Clientset
+		if replace.Replace() > 0 {
+			kubeClient = sentry_debug.GetK8s()
+
+		} else {
+			kubeClient, _ = k8s.GetClient()
 		}
 
-		// TODO: Remove once the NoDefaultTokenAudience feature is finalized
-		noDefaultTokenAudience := false
-
-		return kubernetes.NewValidator(kubeClient, s.conf.GetTokenAudiences(), noDefaultTokenAudience), nil
+		return kubernetes.NewValidator(kubeClient), nil
 	}
 	return selfhosted.NewValidator(), nil
 }
 
-func (s *sentry) Restart(ctx context.Context, conf config.SentryConfig) error {
-	s.restartLock.Lock()
-	defer s.restartLock.Unlock()
-	log.Info("sentry certificate authority is restarting")
-	s.Stop()
-	// Wait 200ms to ensure a clean shutdown
-	time.Sleep(200 * time.Millisecond)
-	return s.Start(ctx, conf)
+func (s *sentry) Restart(ctx context.Context, conf config.SentryConfig) {
+	if s.reloading {
+		return
+	}
+	s.reloading = true
+
+	s.server.Shutdown()
+	go s.Run(ctx, conf, nil)
 }

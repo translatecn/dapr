@@ -1,53 +1,53 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package raft
 
 import (
-	"errors"
 	"io"
 	"strconv"
 	"sync"
 
 	"github.com/hashicorp/raft"
+	"github.com/pkg/errors"
 
-	"github.com/dapr/dapr/pkg/placement/hashing"
 	v1pb "github.com/dapr/dapr/pkg/proto/placement/v1"
 )
 
-// CommandType is the type of raft command in log entry.
+// CommandType raft 命令类型
 type CommandType uint8
 
 const (
-	// MemberUpsert is the command to update or insert new or existing member info.
+	// MemberUpsert 更新、插入成员信息
 	MemberUpsert CommandType = 0
-	// MemberRemove is the command to remove member from actor host member state.
+	// MemberRemove 从actor主机成员状态中删除成员的命令。
 	MemberRemove CommandType = 1
 
-	// TableDisseminate is the reserved command for dissemination loop.
+	// TableDisseminate 是为传播环路保留的命令。
 	TableDisseminate CommandType = 100
 )
 
-// FSM implements a finite state machine that is used
-// along with Raft to provide strong consistency. We implement
-// this outside the Server to avoid exposing this outside the package.
+// FSM提供了一个接口，可以由客户端实现使用复制的日志。
+//type FSM interface {
+//		一旦提交了日志条目，就会调用Apply log。它返回的值将在
+//		Raft返回的ApplyFuture。应用方法方法在与FSM相同的Raft节点上调用。
+//	Apply(*Log) interface{}
+//		快照用于支持日志压缩。这个电话应该返回一个可以用来保存时间点的FSMSnapshot
+//		FSM的快照。Apply和Snapshot不会被多次调用线程，但Apply将与Persist同时调用。这意味着
+//		FSM应该以允许并发的方式实现快照发生时进行更新。
+//	Snapshot() (FSMSnapshot, error)
+//		Restore用于从快照中恢复FSM。它不叫与任何其他命令同时执行。FSM必须丢弃之前的所有内容状态。
+//	Restore(io.ReadCloser) error
+//}
+
+// FSM 实现了一个有限状态机，与Raft一起使用，以提供强一致性。我们在服务器之外实现它，以避免将其暴露在包之外。
 type FSM struct {
-	// stateLock is only used to protect outside callers to State() from
-	// racing with Restore(), which is called by Raft (it puts in a totally
-	// new state store). Everything internal here is synchronized by the
-	// Raft side, so doesn't need to lock this.
+	//stateLock仅用于保护State()的外部调用者不与Restore()竞争，后者由Raft调用(它放入一个全新的状态存储)。
+	//这里的所有内部内容都是由Raft端同步的，所以不需要锁这个。
 	stateLock sync.RWMutex
-	state     *DaprHostMemberState
+	state     *DaprHostMemberState // dapr成员状态
 }
 
 func newFSM() *FSM {
@@ -56,14 +56,14 @@ func newFSM() *FSM {
 	}
 }
 
-// State is used to return a handle to the current state.
+// State 用于返回当前状态的句柄。
 func (c *FSM) State() *DaprHostMemberState {
 	c.stateLock.RLock()
 	defer c.stateLock.RUnlock()
 	return c.state
 }
 
-// PlacementState returns the current placement tables.
+// PlacementState 返回当前的放置表
 func (c *FSM) PlacementState() *v1pb.PlacementTables {
 	c.stateLock.RLock()
 	defer c.stateLock.RUnlock()
@@ -78,33 +78,31 @@ func (c *FSM) PlacementState() *v1pb.PlacementTables {
 	totalLoadMap := 0
 
 	entries := c.state.hashingTableMap()
+	//TODO 再遍历过程中发生了变化
 	for k, v := range entries {
-		var table v1pb.PlacementTable
-		v.ReadInternals(func(hosts map[uint64]string, sortedSet []uint64, loadMap map[string]*hashing.Host, totalLoad int64) {
-			table = v1pb.PlacementTable{
-				Hosts:     make(map[uint64]string),
-				SortedSet: make([]uint64, len(sortedSet)),
-				TotalLoad: totalLoad,
-				LoadMap:   make(map[string]*v1pb.Host),
+		hosts, sortedSet, loadMap, totalLoad := v.GetInternals()
+		table := v1pb.PlacementTable{
+			Hosts:     make(map[uint64]string),
+			SortedSet: make([]uint64, len(sortedSet)),
+			TotalLoad: totalLoad,
+			LoadMap:   make(map[string]*v1pb.Host),
+		}
+
+		for lk, lv := range hosts {
+			table.Hosts[lk] = lv
+		}
+
+		copy(table.SortedSet, sortedSet)
+
+		for lk, lv := range loadMap {
+			h := v1pb.Host{
+				Name: lv.Name,
+				Load: lv.Load,
+				Port: lv.Port,
+				Id:   lv.AppID,
 			}
-
-			for lk, lv := range hosts {
-				table.Hosts[lk] = lv
-			}
-
-			copy(table.SortedSet, sortedSet)
-
-			for lk, lv := range loadMap {
-				h := v1pb.Host{
-					Name: lv.Name,
-					Load: lv.Load,
-					Port: lv.Port,
-					Id:   lv.AppID,
-				}
-				table.LoadMap[lk] = &h
-			}
-		})
-
+			table.LoadMap[lk] = &h
+		}
 		newTable.Entries[k] = &table
 
 		totalHostSize += len(table.Hosts)
@@ -112,11 +110,11 @@ func (c *FSM) PlacementState() *v1pb.PlacementTables {
 		totalLoadMap += len(table.LoadMap)
 	}
 
-	logging.Debugf("PlacementTable Size, Hosts: %d, SortedSet: %d, LoadMap: %d", totalHostSize, totalSortedSet, totalLoadMap)
+	logging.Debugf("PlacementTable 大小, 主机数: %d, 排序集: %d, LoadMap: %d", totalHostSize, totalSortedSet, totalLoadMap)
 
 	return newTable
 }
-
+// OK
 func (c *FSM) upsertMember(cmdData []byte) (bool, error) {
 	var host DaprHostMember
 	if err := unmarshalMsgPack(cmdData, &host); err != nil {
@@ -128,7 +126,7 @@ func (c *FSM) upsertMember(cmdData []byte) (bool, error) {
 
 	return c.state.upsertMember(&host), nil
 }
-
+// OK
 func (c *FSM) removeMember(cmdData []byte) (bool, error) {
 	var host DaprHostMember
 	if err := unmarshalMsgPack(cmdData, &host); err != nil {
@@ -141,7 +139,13 @@ func (c *FSM) removeMember(cmdData []byte) (bool, error) {
 	return c.state.removeMember(&host), nil
 }
 
-// Apply log is invoked once a log entry is committed.
+var _ raft.FSM = &FSM{}
+
+//Apply(*Log) interface{} 执行一条日志
+//Snapshot() (FSMSnapshot, error)// 返回一个快照
+//Restore(io.ReadCloser) error//
+
+// Apply 当提交日志时，就会触发
 func (c *FSM) Apply(log *raft.Log) interface{} {
 	var (
 		err     error
@@ -171,17 +175,15 @@ func (c *FSM) Apply(log *raft.Log) interface{} {
 	return updated
 }
 
-// Snapshot is used to support log compaction. This call should
-// return an FSMSnapshot which can be used to save a point-in-time
-// snapshot of the FSM.
+// Snapshot
+// 用于支持日志压缩。这个调佣应该返回一个FSMSnapshot，它可以用来保存一个时间点 FSM的快照。
 func (c *FSM) Snapshot() (raft.FSMSnapshot, error) {
 	return &snapshot{
 		state: c.state.clone(),
 	}, nil
 }
 
-// Restore streams in the snapshot and replaces the current state store with a
-// new one based on the snapshot if all goes OK during the restore.
+// Restore 恢复快照中的流，并根据快照替换当前的状态存储，如果恢复过程中一切正常的话。
 func (c *FSM) Restore(old io.ReadCloser) error {
 	defer old.Close()
 

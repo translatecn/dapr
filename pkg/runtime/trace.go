@@ -1,119 +1,37 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package runtime
 
 import (
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opencensus.io/trace"
 )
 
-// tracerProviderStore allows us to capture the trace provider options
-// and set a trace provider as per those settings
-//
-// This is needed because the OpenTelemetry does not allow accessing
-// tracer provider settings after registration
-type tracerProviderStore interface {
-	// RegisterOptions registers a trace.Exporter.
-	RegisterExporter(exporter sdktrace.SpanExporter)
-	RegisterResource(res *resource.Resource)
-	RegisterSampler(sampler sdktrace.Sampler)
-	RegisterTracerProvider() *sdktrace.TracerProvider
+// traceExporterStore 允许我们捕获导出器注册的指标。
+// 这是有必要的，因为OpenCensus库只暴露了全局方法，用于 出口商的注册。
+type traceExporterStore interface {
+	// RegisterExporter 注册导出器
+	RegisterExporter(exporter trace.Exporter)
 }
 
-// newOpentelemetryTracerProviderStore returns an opentelemetryOptionsStore
-func newOpentelemetryTracerProviderStore() *opentelemetryTracerProviderStore {
-	exps := []sdktrace.SpanExporter{}
-	return &opentelemetryTracerProviderStore{exps, nil, nil}
+// openCensusExporterStore
+// 是traceExporterStore的一个实现 ，它利用了OpenCensus库的全局exporer存储（`trace'）。
+type openCensusExporterStore struct{}
+
+// RegisterExporter 使用OpenCensus的全局注册来实现 traceExporterStore。
+func (s openCensusExporterStore) RegisterExporter(exporter trace.Exporter) {
+	trace.RegisterExporter(exporter)
 }
 
-// opentelemetryOptionsStore is an implementation of traceOptionsStore
-type opentelemetryTracerProviderStore struct {
-	exporters []sdktrace.SpanExporter
-	res       *resource.Resource
-	sampler   sdktrace.Sampler
+// fakeTraceExporterStore
+//实现traceExporterStore，只记录被注册/应用的出口商和配置。这仅仅是为了在单元测试中使用。
+type fakeTraceExporterStore struct {
+	exporters []trace.Exporter
 }
 
-// RegisterExporter adds a Span Exporter for registration with open telemetry global trace provider
-func (s *opentelemetryTracerProviderStore) RegisterExporter(exporter sdktrace.SpanExporter) {
-	s.exporters = append(s.exporters, exporter)
+// RegisterExporter 记录给定的trace.Exporter。
+func (r *fakeTraceExporterStore) RegisterExporter(exporter trace.Exporter) {
+	r.exporters = append(r.exporters, exporter)
 }
-
-// RegisterResource adds a Resource for registration with open telemetry global trace provider
-func (s *opentelemetryTracerProviderStore) RegisterResource(res *resource.Resource) {
-	s.res = res
-}
-
-// RegisterSampler adds a custom sampler for registration with open telemetry global trace provider
-func (s *opentelemetryTracerProviderStore) RegisterSampler(sampler sdktrace.Sampler) {
-	s.sampler = sampler
-}
-
-// RegisterTraceProvider registers a trace provider as per the tracer options in the store
-func (s *opentelemetryTracerProviderStore) RegisterTracerProvider() *sdktrace.TracerProvider {
-	if len(s.exporters) != 0 {
-		tracerOptions := []sdktrace.TracerProviderOption{}
-		for _, exporter := range s.exporters {
-			tracerOptions = append(tracerOptions, sdktrace.WithBatcher(exporter))
-		}
-
-		if s.res != nil {
-			tracerOptions = append(tracerOptions, sdktrace.WithResource(s.res))
-		}
-
-		if s.sampler != nil {
-			tracerOptions = append(tracerOptions, sdktrace.WithSampler(s.sampler))
-		}
-
-		tp := sdktrace.NewTracerProvider(tracerOptions...)
-
-		otel.SetTracerProvider(tp)
-		return tp
-	}
-	return nil
-}
-
-// fakeTracerOptionsStore implements tracerOptionsStore by merely record the exporters
-// and config that were registered/applied.
-//
-// This is only for use in unit tests.
-type fakeTracerProviderStore struct {
-	exporters []sdktrace.SpanExporter
-	res       *resource.Resource
-	sampler   sdktrace.Sampler
-}
-
-// newFakeTracerProviderStore returns an opentelemetryOptionsStore
-func newFakeTracerProviderStore() *fakeTracerProviderStore {
-	exps := []sdktrace.SpanExporter{}
-	return &fakeTracerProviderStore{exps, nil, nil}
-}
-
-// RegisterExporter adds a Span Exporter for registration with open telemetry global trace provider
-func (s *fakeTracerProviderStore) RegisterExporter(exporter sdktrace.SpanExporter) {
-	s.exporters = append(s.exporters, exporter)
-}
-
-// RegisterResource adds a Resource for registration with open telemetry global trace provider
-func (s *fakeTracerProviderStore) RegisterResource(res *resource.Resource) {
-	s.res = res
-}
-
-// RegisterSampler adds a custom sampler for registration with open telemetry global trace provider
-func (s *fakeTracerProviderStore) RegisterSampler(sampler sdktrace.Sampler) {
-	s.sampler = sampler
-}
-
-// RegisterTraceProvider does nothing
-func (s *fakeTracerProviderStore) RegisterTracerProvider() *sdktrace.TracerProvider { return nil }

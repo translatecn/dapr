@@ -1,30 +1,22 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package actors
 
 import (
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/atomic"
 )
 
 var reentrancyStackDepth = 32
 
 func TestIsBusy(t *testing.T) {
-	testActor := newActor("testType", "testID", &reentrancyStackDepth, nil)
+	testActor := newActor("testType", "testID", &reentrancyStackDepth)
 
 	testActor.lock(nil)
 	assert.Equal(t, true, testActor.isBusy())
@@ -32,7 +24,7 @@ func TestIsBusy(t *testing.T) {
 }
 
 func TestTurnBasedConcurrencyLocks(t *testing.T) {
-	testActor := newActor("testType", "testID", &reentrancyStackDepth, nil)
+	testActor := newActor("testType", "testID", &reentrancyStackDepth)
 
 	// first lock
 	testActor.lock(nil)
@@ -72,7 +64,7 @@ func TestTurnBasedConcurrencyLocks(t *testing.T) {
 
 func TestDisposedActor(t *testing.T) {
 	t.Run("not disposed", func(t *testing.T) {
-		testActor := newActor("testType", "testID", &reentrancyStackDepth, nil)
+		testActor := newActor("testType", "testID", &reentrancyStackDepth)
 
 		testActor.lock(nil)
 		testActor.unlock()
@@ -83,7 +75,7 @@ func TestDisposedActor(t *testing.T) {
 	})
 
 	t.Run("disposed", func(t *testing.T) {
-		testActor := newActor("testType", "testID", &reentrancyStackDepth, nil)
+		testActor := newActor("testType", "testID", &reentrancyStackDepth)
 
 		testActor.lock(nil)
 		ch := testActor.channel()
@@ -99,7 +91,7 @@ func TestDisposedActor(t *testing.T) {
 
 func TestPendingActorCalls(t *testing.T) {
 	t.Run("no pending actor call with new actor object", func(t *testing.T) {
-		testActor := newActor("testType", "testID", &reentrancyStackDepth, nil)
+		testActor := newActor("testType", "testID", &reentrancyStackDepth)
 		channelClosed := false
 
 		select {
@@ -114,10 +106,10 @@ func TestPendingActorCalls(t *testing.T) {
 	})
 
 	t.Run("close channel before timeout", func(t *testing.T) {
-		testActor := newActor("testType", "testID", &reentrancyStackDepth, nil)
+		testActor := newActor("testType", "testID", &reentrancyStackDepth)
 		testActor.lock(nil)
 
-		channelClosed := atomic.Bool{}
+		channelClosed := atomic.NewBool(false)
 		go func() {
 			select {
 			case <-time.After(200 * time.Millisecond):
@@ -135,7 +127,7 @@ func TestPendingActorCalls(t *testing.T) {
 	})
 
 	t.Run("multiple listeners", func(t *testing.T) {
-		testActor := newActor("testType", "testID", &reentrancyStackDepth, nil)
+		testActor := newActor("testType", "testID", &reentrancyStackDepth)
 		testActor.lock(nil)
 
 		nListeners := 10

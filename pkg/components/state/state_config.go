@@ -1,29 +1,20 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package state
 
 import (
 	"fmt"
-	"os"
 	"strings"
-	"sync"
+
+	"github.com/pkg/errors"
 )
 
 const (
 	strategyKey = "keyPrefix"
 
-	strategyNamespace = "namespace"
 	strategyAppid     = "appid"
 	strategyStoreName = "name"
 	strategyNone      = "none"
@@ -32,63 +23,52 @@ const (
 	daprSeparator = "||"
 )
 
-var (
-	statesConfigurationLock sync.Mutex
-	statesConfiguration     = map[string]*StoreConfiguration{}
-	namespace               = os.Getenv("NAMESPACE")
-)
+// 全局对象   ，存储实例
+var statesConfiguration = map[string]*StoreConfiguration{}
 
 type StoreConfiguration struct {
-	keyPrefixStrategy string
+	keyPrefixStrategy string // k,v存储 , 默认给key 添加一个前缀
 }
 
+// SaveStateConfiguration 保存状态配置
 func SaveStateConfiguration(storeName string, metadata map[string]string) error {
-	strategy := metadata[strategyKey]
+	strategy := metadata[strategyKey] // keyPrefix
 	strategy = strings.ToLower(strategy)
 	if strategy == "" {
-		strategy = strategyDefault
+		strategy = strategyDefault // appid
 	} else {
 		err := checkKeyIllegal(metadata[strategyKey])
 		if err != nil {
 			return err
 		}
 	}
-
-	statesConfigurationLock.Lock()
-	defer statesConfigurationLock.Unlock()
+	//                   redis-statestore
 	statesConfiguration[storeName] = &StoreConfiguration{keyPrefixStrategy: strategy}
 	return nil
 }
 
+//GetModifiedStateKey 获取修改后的状态键
 func GetModifiedStateKey(key, storeName, appID string) (string, error) {
 	if err := checkKeyIllegal(key); err != nil {
 		return "", err
 	}
-	stateConfiguration := getStateConfiguration(storeName)
-	switch stateConfiguration.keyPrefixStrategy {
-	case strategyNone:
+	stateConfiguration := getStateConfiguration(storeName) // 从全局对象中获取的
+	switch stateConfiguration.keyPrefixStrategy {          // appid
+	case strategyNone: // none
 		return key, nil
-	case strategyStoreName:
-		return fmt.Sprintf("%s%s%s", storeName, daprSeparator, key), nil
-	case strategyAppid:
+	case strategyStoreName: // name
+		return fmt.Sprintf("%s%s%s", storeName, daprSeparator, key), nil // x||key
+	case strategyAppid: // appid ，默认是此值
 		if appID == "" {
 			return key, nil
 		}
 		return fmt.Sprintf("%s%s%s", appID, daprSeparator, key), nil
-	case strategyNamespace:
-		if appID == "" {
-			return key, nil
-		}
-		if namespace == "" {
-			// if namespace is empty, fallback to app id strategy
-			return fmt.Sprintf("%s%s%s", appID, daprSeparator, key), nil
-		}
-		return fmt.Sprintf("%s.%s%s%s", namespace, appID, daprSeparator, key), nil
 	default:
 		return fmt.Sprintf("%s%s%s", stateConfiguration.keyPrefixStrategy, daprSeparator, key), nil
 	}
 }
 
+// GetOriginalStateKey 获取dapr加工前的key
 func GetOriginalStateKey(modifiedStateKey string) string {
 	splits := strings.Split(modifiedStateKey, daprSeparator)
 	if len(splits) <= 1 {
@@ -98,8 +78,6 @@ func GetOriginalStateKey(modifiedStateKey string) string {
 }
 
 func getStateConfiguration(storeName string) *StoreConfiguration {
-	statesConfigurationLock.Lock()
-	defer statesConfigurationLock.Unlock()
 	c := statesConfiguration[storeName]
 	if c == nil {
 		c = &StoreConfiguration{keyPrefixStrategy: strategyDefault}
@@ -109,9 +87,10 @@ func getStateConfiguration(storeName string) *StoreConfiguration {
 	return c
 }
 
+// 检查包不包含 ||
 func checkKeyIllegal(key string) error {
 	if strings.Contains(key, daprSeparator) {
-		return fmt.Errorf("input key/keyPrefix '%s' can't contain '%s'", key, daprSeparator)
+		return errors.Errorf("input key/keyPrefix '%s' can't contain '%s'", key, daprSeparator)
 	}
 	return nil
 }

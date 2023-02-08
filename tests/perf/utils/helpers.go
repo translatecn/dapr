@@ -1,33 +1,27 @@
-//go:build perf
 // +build perf
 
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package utils
 
 import (
-	"context"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	guuid "github.com/google/uuid"
 
 	"github.com/dapr/components-contrib/bindings"
 	"github.com/dapr/components-contrib/bindings/azure/blobstorage"
-	"github.com/dapr/components-contrib/metadata"
 	"github.com/dapr/dapr/tests/perf"
 	"github.com/dapr/kit/logger"
 )
@@ -71,6 +65,113 @@ func GenerateRandomStringKeyValues(num int) []SimpleKeyValue {
 	return GenerateRandomStringValues(keys)
 }
 
+func newHTTPClient() http.Client {
+	return http.Client{
+		Transport: &http.Transport{
+			// Sometimes, the first connection to ingress endpoint takes longer than 1 minute (e.g. AKS)
+			Dial: (&net.Dialer{
+				// This number cannot be large. Callers should retry failed calls (see HTTPGetNTimes())
+				Timeout: 3 * time.Minute,
+			}).Dial,
+		},
+	}
+}
+
+// HTTPGetNTimes calls the url n times and returns the first success or last error.
+func HTTPGetNTimes(url string, n int) ([]byte, error) {
+	var res []byte
+	var err error
+	for i := n - 1; i >= 0; i-- {
+		res, err = HTTPGet(url)
+		if i == 0 {
+			break
+		}
+
+		if err != nil {
+			time.Sleep(time.Second)
+		} else {
+			return res, nil
+		}
+	}
+
+	return res, err
+}
+
+// HTTPGet is a helper to make GET request call to url
+func HTTPGet(url string) ([]byte, error) {
+	client := newHTTPClient()
+	resp, err := client.Get(sanitizeHTTPURL(url)) //nolint
+	if err != nil {
+		return nil, err
+	}
+
+	return extractBody(resp.Body)
+}
+
+// HTTPGetRawNTimes calls the url n times and returns the first success or last error.
+func HTTPGetRawNTimes(url string, n int) (*http.Response, error) {
+	var res *http.Response
+	var err error
+	for i := n - 1; i >= 0; i-- {
+		res, err = HTTPGetRaw(url)
+		if i == 0 {
+			break
+		}
+
+		if err != nil {
+			time.Sleep(time.Second)
+		} else {
+			return res, nil
+		}
+	}
+
+	return res, err
+}
+
+// HTTPGetRaw is a helper to make GET request call to url
+func HTTPGetRaw(url string) (*http.Response, error) {
+	client := newHTTPClient()
+	resp, err := client.Get(sanitizeHTTPURL(url)) //nolint
+	if err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// HTTPPost is a helper to make POST request call to url
+func HTTPPost(url string, data []byte) ([]byte, error) {
+	client := newHTTPClient()
+	resp, err := client.Post(sanitizeHTTPURL(url), "application/json", bytes.NewBuffer(data)) //nolint
+	if err != nil {
+		return nil, err
+	}
+
+	return extractBody(resp.Body)
+}
+
+// HTTPDelete calls a given URL with the HTTP DELETE method.
+func HTTPDelete(url string) ([]byte, error) {
+	client := newHTTPClient()
+
+	req, err := http.NewRequest("DELETE", sanitizeHTTPURL(url), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := extractBody(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	return body, nil
+}
+
 // UploadAzureBlob takes test output data and saves it to an Azure Blob Storage container
 func UploadAzureBlob(report *perf.TestReport) error {
 	accountName, accountKey := os.Getenv("AZURE_STORAGE_ACCOUNT"), os.Getenv("AZURE_STORAGE_ACCESS_KEY")
@@ -94,13 +195,11 @@ func UploadAzureBlob(report *perf.TestReport) error {
 	azblob := blobstorage.NewAzureBlobStorage(l)
 
 	err = azblob.Init(bindings.Metadata{
-		Base: metadata.Base{
-			Properties: map[string]string{
-				"storageAccount":    accountName,
-				"storageAccessKey":  accountKey,
-				"container":         container,
-				"publicAccessLevel": "container",
-			},
+		Properties: map[string]string{
+			"storageAccount":    accountName,
+			"storageAccessKey":  accountKey,
+			"container":         container,
+			"publicAccessLevel": "container",
 		},
 	})
 	if err != nil {
@@ -108,9 +207,7 @@ func UploadAzureBlob(report *perf.TestReport) error {
 	}
 
 	filename := fmt.Sprintf("%s-%v-%v-%v", report.TestName, now.Hour(), time.Hour.Minutes(), time.Hour.Seconds())
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	_, err = azblob.Invoke(ctx, &bindings.InvokeRequest{
+	_, err = azblob.Invoke(&bindings.InvokeRequest{
 		Operation: bindings.CreateOperation,
 		Data:      b,
 		Metadata: map[string]string{
@@ -119,4 +216,25 @@ func UploadAzureBlob(report *perf.TestReport) error {
 		},
 	})
 	return err
+}
+
+func sanitizeHTTPURL(url string) string {
+	if !strings.Contains(url, "http") {
+		url = fmt.Sprintf("http://%s", url)
+	}
+
+	return url
+}
+
+func extractBody(r io.ReadCloser) ([]byte, error) {
+	if r != nil {
+		defer r.Close()
+	}
+
+	body, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+
+	return body, nil
 }

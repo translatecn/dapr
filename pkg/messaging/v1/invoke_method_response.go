@@ -1,27 +1,13 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package v1
 
 import (
-	"bytes"
-	"errors"
-	"io"
-	"strings"
-
 	"github.com/valyala/fasthttp"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	commonv1pb "github.com/dapr/dapr/pkg/proto/common/v1"
@@ -31,7 +17,6 @@ import (
 // InvokeMethodResponse holds InternalInvokeResponse protobuf message
 // and provides the helpers to manage it.
 type InvokeMethodResponse struct {
-	replayableRequest
 	r *internalv1pb.InternalInvokeResponse
 }
 
@@ -46,10 +31,10 @@ func NewInvokeMethodResponse(statusCode int32, statusMessage string, statusDetai
 }
 
 // InternalInvokeResponse returns InvokeMethodResponse for InternalInvokeResponse pb to use the helpers.
-func InternalInvokeResponse(pb *internalv1pb.InternalInvokeResponse) (*InvokeMethodResponse, error) {
-	rsp := &InvokeMethodResponse{r: pb}
-	if pb.Message == nil {
-		pb.Message = &commonv1pb.InvokeResponse{Data: nil}
+func InternalInvokeResponse(resp *internalv1pb.InternalInvokeResponse) (*InvokeMethodResponse, error) {
+	rsp := &InvokeMethodResponse{r: resp}
+	if resp.Message == nil {
+		resp.Message = &commonv1pb.InvokeResponse{Data: &anypb.Any{Value: []byte{}}}
 	}
 
 	return rsp, nil
@@ -61,26 +46,17 @@ func (imr *InvokeMethodResponse) WithMessage(pb *commonv1pb.InvokeResponse) *Inv
 	return imr
 }
 
-// WithRawData sets message data from a readable stream.
-func (imr *InvokeMethodResponse) WithRawData(data io.Reader) *InvokeMethodResponse {
-	imr.ResetMessageData()
-	imr.replayableRequest.WithRawData(data)
-	return imr
-}
+// WithRawData 设置使用字节数据和内容类型的消息。
+func (imr *InvokeMethodResponse) WithRawData(data []byte, contentType string) *InvokeMethodResponse {
+	if contentType == "" {
+		contentType = JSONContentType
+	}
 
-// WithRawDataBytes sets message data from a []byte.
-func (imr *InvokeMethodResponse) WithRawDataBytes(data []byte) *InvokeMethodResponse {
-	return imr.WithRawData(bytes.NewReader(data))
-}
-
-// WithRawDataString sets message data from a string.
-func (imr *InvokeMethodResponse) WithRawDataString(data string) *InvokeMethodResponse {
-	return imr.WithRawData(strings.NewReader(data))
-}
-
-// WithContentType sets the content type.
-func (imr *InvokeMethodResponse) WithContentType(contentType string) *InvokeMethodResponse {
 	imr.r.Message.ContentType = contentType
+
+	// 克隆数据以防止GC删除数据
+	imr.r.Message.Data = &anypb.Any{Value: cloneBytes(data)}
+
 	return imr
 }
 
@@ -90,15 +66,10 @@ func (imr *InvokeMethodResponse) WithHeaders(headers metadata.MD) *InvokeMethodR
 	return imr
 }
 
-// WithFastHTTPHeaders populates HTTP response header to gRPC header metadata.
-func (imr *InvokeMethodResponse) WithHTTPHeaders(headers map[string][]string) *InvokeMethodResponse {
-	imr.r.Headers = MetadataToInternalMetadata(headers)
-	return imr
-}
-
-// WithFastHTTPHeaders populates fasthttp response header to gRPC header metadata.
+// WithFastHTTPHeaders 将fasthttp响应头填充到gRPC头元数据中。
 func (imr *InvokeMethodResponse) WithFastHTTPHeaders(header *fasthttp.ResponseHeader) *InvokeMethodResponse {
 	md := DaprInternalMetadata{}
+	//可能 a=[1,2,3,4,]
 	header.VisitAll(func(key []byte, value []byte) {
 		md[string(key)] = &internalv1pb.ListStringValue{
 			Values: []string{string(value)},
@@ -116,154 +87,57 @@ func (imr *InvokeMethodResponse) WithTrailers(trailer metadata.MD) *InvokeMethod
 	return imr
 }
 
-// WithReplay enables replaying for the data stream.
-func (imr *InvokeMethodResponse) WithReplay(enabled bool) *InvokeMethodResponse {
-	// If the object has data in-memory, WithReplay is a nop
-	if !imr.HasMessageData() {
-		imr.replayableRequest.SetReplay(enabled)
-	}
-	return imr
-}
-
-// CanReplay returns true if the data stream can be replayed.
-func (imr *InvokeMethodResponse) CanReplay() bool {
-	// We can replay if:
-	// - The object has data in-memory
-	// - The request is replayable
-	return imr.HasMessageData() || imr.replayableRequest.CanReplay()
-}
-
 // Status gets Response status.
 func (imr *InvokeMethodResponse) Status() *internalv1pb.Status {
-	if imr.r == nil {
-		return nil
-	}
-	return imr.r.Status
+	return imr.r.GetStatus()
 }
 
-// IsHTTPResponse returns true if response status code is http response status.
+// IsHTTPResponse 如果响应状态代码是http响应状态，返回true。
 func (imr *InvokeMethodResponse) IsHTTPResponse() bool {
-	if imr.r == nil {
-		return false
-	}
 	// gRPC status code <= 15 - https://github.com/grpc/grpc/blob/master/doc/statuscodes.md
 	// HTTP status code >= 100 - https://tools.ietf.org/html/rfc2616#section-10
-	return imr.r.Status.Code >= 100
+	return imr.r.GetStatus().Code >= 100
 }
 
-// Proto returns the internal InvokeMethodResponse Proto object.
+// Proto clones the internal InvokeMethodResponse pb object.
 func (imr *InvokeMethodResponse) Proto() *internalv1pb.InternalInvokeResponse {
 	return imr.r
 }
 
-// ProtoWithData returns a copy of the internal InternalInvokeResponse Proto object with the entire data stream read into the Data property.
-func (imr *InvokeMethodResponse) ProtoWithData() (*internalv1pb.InternalInvokeResponse, error) {
-	if imr.r == nil || imr.r.Message == nil {
-		return nil, errors.New("message is nil")
-	}
-
-	// If the data is already in-memory in the object, return the object directly.
-	// This doesn't copy the object, and that's fine because receivers are not expected to modify the received object.
-	// Only reason for cloning the object below is to make ProtoWithData concurrency-safe.
-	if imr.HasMessageData() {
-		return imr.r, nil
-	}
-
-	// Clone the object
-	m := proto.Clone(imr.r).(*internalv1pb.InternalInvokeResponse)
-
-	// Read the data and store it in the object
-	data, err := imr.RawDataFull()
-	if err != nil {
-		return m, err
-	}
-	m.Message.Data = &anypb.Any{
-		Value: data,
-	}
-
-	return m, nil
-}
-
 // Headers gets Headers metadata.
 func (imr *InvokeMethodResponse) Headers() DaprInternalMetadata {
-	if imr.r == nil {
-		return nil
-	}
 	return imr.r.Headers
 }
 
 // Trailers gets Trailers metadata.
 func (imr *InvokeMethodResponse) Trailers() DaprInternalMetadata {
-	if imr.r == nil {
-		return nil
-	}
 	return imr.r.Trailers
 }
 
 // Message returns message field in InvokeMethodResponse.
 func (imr *InvokeMethodResponse) Message() *commonv1pb.InvokeResponse {
-	if imr.r == nil {
-		return nil
-	}
 	return imr.r.Message
 }
 
-// HasMessageData returns true if the message object contains a slice of data buffered.
-func (imr *InvokeMethodResponse) HasMessageData() bool {
+// RawData returns content_type and byte array body.
+func (imr *InvokeMethodResponse) RawData() (string, []byte) {
 	m := imr.r.Message
-	return m != nil && m.Data != nil && len(m.Data.Value) > 0
-}
-
-// ResetMessageData resets the data inside the message object if present.
-func (imr *InvokeMethodResponse) ResetMessageData() {
-	if !imr.HasMessageData() {
-		return
+	if m == nil || m.GetData() == nil {
+		return "", nil
 	}
 
-	imr.r.Message.Data.Reset()
-}
+	contentType := m.GetContentType()
+	dataTypeURL := m.GetData().GetTypeUrl()
+	dataValue := m.GetData().GetValue()
 
-// ContenType returns the content type of the message.
-func (imr *InvokeMethodResponse) ContentType() string {
-	m := imr.r.Message
-	if m == nil {
-		return ""
+	// set content_type to application/json only if typeurl is unset and data is given
+	if contentType == "" && (dataTypeURL == "" && dataValue != nil) {
+		contentType = JSONContentType
 	}
 
-	contentType := m.ContentType
-
-	if m.Data != nil && m.Data.TypeUrl != "" {
+	if dataTypeURL != "" {
 		contentType = ProtobufContentType
 	}
 
-	return contentType
-}
-
-// RawData returns the stream body.
-func (imr *InvokeMethodResponse) RawData() (r io.Reader) {
-	m := imr.r.Message
-	if m == nil {
-		return nil
-	}
-
-	// If the message has a data property, use that
-	if imr.HasMessageData() {
-		return bytes.NewReader(m.Data.Value)
-	}
-
-	return imr.replayableRequest.RawData()
-}
-
-// RawDataFull returns the entire data read from the stream body.
-func (imr *InvokeMethodResponse) RawDataFull() ([]byte, error) {
-	// If the message has a data property, use that
-	if imr.HasMessageData() {
-		return imr.r.Message.Data.Value, nil
-	}
-
-	r := imr.RawData()
-	if r == nil {
-		return nil, nil
-	}
-	return io.ReadAll(r)
+	return contentType, dataValue
 }

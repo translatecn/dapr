@@ -1,120 +1,96 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package config
 
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"sort"
 	"strings"
 	"time"
 
-	grpcRetry "github.com/grpc-ecosystem/go-grpc-middleware/retry"
+	grpc_retry "github.com/grpc-ecosystem/go-grpc-middleware/retry"
+	"github.com/pkg/errors"
 	yaml "gopkg.in/yaml.v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 
-	"github.com/dapr/dapr/pkg/buildinfo"
 	operatorv1pb "github.com/dapr/dapr/pkg/proto/operator/v1"
-	"github.com/dapr/dapr/utils"
 )
 
-// Feature Flags section
+const (
+	operatorCallTimeout         = time.Second * 5
+	operatorMaxRetries          = 100
+	AllowAccess                 = "allow"
+	DenyAccess                  = "deny"
+	DefaultTrustDomain          = "public"
+	DefaultNamespace            = "default"
+	ActionPolicyApp             = "app"
+	ActionPolicyGlobal          = "global"
+	SpiffeIDPrefix              = "spiffe://"
+	HTTPProtocol                = "http"
+	GRPCProtocol                = "grpc"
+	ActorReentrancy     Feature = "Actor.Reentrancy" // actor重入
+	ActorTypeMetadata   Feature = "Actor.TypeMetadata"
+	PubSubRouting       Feature = "PubSub.Routing"
+	StateEncryption     Feature = "State.Encryption"
+)
 
 type Feature string
 
-const (
-	// Enable support for streaming in HTTP service invocation
-	ServiceInvocationStreaming Feature = "ServiceInvocationStreaming"
-	// Enables the app health check feature, allowing the use of the CLI flags
-	AppHealthCheck Feature = "AppHealthCheck"
-)
-
-// end feature flags section
-
-const (
-	operatorCallTimeout = time.Second * 5
-	operatorMaxRetries  = 100
-	AllowAccess         = "allow"
-	DenyAccess          = "deny"
-	DefaultTrustDomain  = "public"
-	DefaultNamespace    = "default"
-	ActionPolicyApp     = "app"
-	ActionPolicyGlobal  = "global"
-	SpiffeIDPrefix      = "spiffe://"
-	HTTPProtocol        = "http"
-	GRPCProtocol        = "grpc"
-)
-
-// Configuration is an internal (and duplicate) representation of Dapr's Configuration CRD.
+// Configuration 是Dapr的配置CRD的内部（和重复）表示。
 type Configuration struct {
 	metav1.TypeMeta `json:",inline" yaml:",inline"`
 	// See https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#metadata
 	metav1.ObjectMeta `json:"metadata,omitempty" yaml:"metadata,omitempty"`
 	// See https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
 	Spec ConfigurationSpec `json:"spec" yaml:"spec"`
-
-	// Internal fields
-	featuresEnabled map[Feature]struct{}
 }
 
-// AccessControlList is an in-memory access control list config for fast lookup.
+// AccessControlList 是用于快速查找的内存访问控制列表配置。
 type AccessControlList struct {
-	DefaultAction string
-	TrustDomain   string
+	DefaultAction string //
+	TrustDomain   string //
 	PolicySpec    map[string]AccessControlListPolicySpec
 }
 
-// AccessControlListPolicySpec is an in-memory access control list config per app for fast lookup.
+// AccessControlListPolicySpec 是每个应用程序的内存访问控制列表配置，用于快速查找。
 type AccessControlListPolicySpec struct {
-	AppName             string
+	AppName             string // 应用名字
 	DefaultAction       string
 	TrustDomain         string
 	Namespace           string
-	AppOperationActions *Trie
+	AppOperationActions map[string]AccessControlListOperationAction // 应用操作行为
 }
 
-// AccessControlListOperationAction is an in-memory access control list config per operation for fast lookup.
+// AccessControlListOperationAction 是每个操作的内存访问控制列表配置，用于快速查找。
 type AccessControlListOperationAction struct {
-	VerbAction      map[string]string
-	OperationName   string
-	OperationAction string
+	VerbAction       map[string]string // 其实就是http method
+	OperationPostFix string
+	OperationAction  string
 }
 
 type ConfigurationSpec struct {
-	HTTPPipelineSpec    PipelineSpec       `json:"httpPipeline,omitempty" yaml:"httpPipeline,omitempty"`
-	AppHTTPPipelineSpec PipelineSpec       `json:"appHttpPipeline,omitempty" yaml:"appHttpPipeline,omitempty"`
-	TracingSpec         TracingSpec        `json:"tracing,omitempty" yaml:"tracing,omitempty"`
-	MTLSSpec            MTLSSpec           `json:"mtls,omitempty" yaml:"mtls,omitempty"`
-	MetricSpec          MetricSpec         `json:"metric,omitempty" yaml:"metric,omitempty"`
-	MetricsSpec         MetricSpec         `json:"metrics,omitempty" yaml:"metrics,omitempty"`
-	Secrets             SecretsSpec        `json:"secrets,omitempty" yaml:"secrets,omitempty"`
-	AccessControlSpec   AccessControlSpec  `json:"accessControl,omitempty" yaml:"accessControl,omitempty"`
-	NameResolutionSpec  NameResolutionSpec `json:"nameResolution,omitempty" yaml:"nameResolution,omitempty"`
-	Features            []FeatureSpec      `json:"features,omitempty" yaml:"features,omitempty"`
-	APISpec             APISpec            `json:"api,omitempty" yaml:"api,omitempty"`
-	ComponentsSpec      ComponentsSpec     `json:"components,omitempty" yaml:"components,omitempty"`
-	LoggingSpec         LoggingSpec        `json:"logging,omitempty" yaml:"logging,omitempty"`
+	HTTPPipelineSpec   PipelineSpec       `json:"httpPipeline,omitempty" yaml:"httpPipeline,omitempty"`
+	TracingSpec        TracingSpec        `json:"tracing,omitempty" yaml:"tracing,omitempty"`
+	MTLSSpec           MTLSSpec           `json:"mtls,omitempty" yaml:"mtls,omitempty"`
+	MetricSpec         MetricSpec         `json:"metric,omitempty" yaml:"metric,omitempty"`
+	Secrets            SecretsSpec        `json:"secrets,omitempty" yaml:"secrets,omitempty"`
+	AccessControlSpec  AccessControlSpec  `json:"accessControl,omitempty" yaml:"accessControl,omitempty"`
+	NameResolutionSpec NameResolutionSpec `json:"nameResolution,omitempty" yaml:"nameResolution,omitempty"`
+	Features           []FeatureSpec      `json:"features,omitempty" yaml:"features,omitempty"`
+	APISpec            APISpec            `json:"api,omitempty" yaml:"api,omitempty"`
 }
 
 type SecretsSpec struct {
 	Scopes []SecretsScope `json:"scopes"`
 }
 
-// SecretsScope defines the scope for secrets.
+// SecretsScope   定义了secret的范围。
 type SecretsScope struct {
 	DefaultAccess  string   `json:"defaultAccess,omitempty" yaml:"defaultAccess,omitempty"`
 	StoreName      string   `json:"storeName" yaml:"storeName"`
@@ -126,12 +102,12 @@ type PipelineSpec struct {
 	Handlers []HandlerSpec `json:"handlers" yaml:"handlers"`
 }
 
-// APISpec describes the configuration for Dapr APIs.
+// APISpec Dapr API的配置信息
 type APISpec struct {
 	Allowed []APIAccessRule `json:"allowed,omitempty"`
 }
 
-// APIAccessRule describes an access rule for allowing a Dapr API to be enabled and accessible by an app.
+// APIAccessRule 描述了一个允许应用程序启用和访问Dapr API的访问规则。
 type APIAccessRule struct {
 	Name     string `json:"name"`
 	Version  string `json:"version"`
@@ -143,11 +119,6 @@ type HandlerSpec struct {
 	Type         string       `json:"type" yaml:"type"`
 	Version      string       `json:"version" yaml:"version"`
 	SelectorSpec SelectorSpec `json:"selector,omitempty" yaml:"selector,omitempty"`
-}
-
-// LogName returns the name of the handler that can be used in logging.
-func (h HandlerSpec) LogName() string {
-	return utils.ComponentLogName(h.Name, h.Type, h.Version)
 }
 
 type SelectorSpec struct {
@@ -163,40 +134,19 @@ type TracingSpec struct {
 	SamplingRate string     `json:"samplingRate" yaml:"samplingRate"`
 	Stdout       bool       `json:"stdout" yaml:"stdout"`
 	Zipkin       ZipkinSpec `json:"zipkin" yaml:"zipkin"`
-	Otel         OtelSpec   `json:"otel" yaml:"otel"`
 }
 
-// ZipkinSpec defines Zipkin exporter configurations.
+// ZipkinSpec 定义了zipkin的配置
 type ZipkinSpec struct {
 	EndpointAddress string `json:"endpointAddress" yaml:"endpointAddress"`
 }
 
-// OtelSpec defines Otel exporter configurations.
-type OtelSpec struct {
-	Protocol        string `json:"protocol" yaml:"protocol"`
-	EndpointAddress string `json:"endpointAddress" yaml:"endpointAddress"`
-	IsSecure        bool   `json:"isSecure" yaml:"isSecure"`
-}
-
-// MetricSpec configuration for metrics.
+// MetricSpec 监控是否开启
 type MetricSpec struct {
-	Enabled bool          `json:"enabled" yaml:"enabled"`
-	Rules   []MetricsRule `json:"rules" yaml:"rules"`
+	Enabled bool `json:"enabled" yaml:"enabled"`
 }
 
-// MetricsRule defines configuration options for a metric.
-type MetricsRule struct {
-	Name   string        `json:"name" yaml:"name"`
-	Labels []MetricLabel `json:"labels" yaml:"labels"`
-}
-
-// MetricsLabel defines an object that allows to set regex expressions for a label.
-type MetricLabel struct {
-	Name  string            `json:"name" yaml:"name"`
-	Regex map[string]string `json:"regex" yaml:"regex"`
-}
-
-// AppPolicySpec defines the policy data structure for each app.
+// AppPolicySpec 为每个应用程序定义策略数据结构。
 type AppPolicySpec struct {
 	AppName             string         `json:"appId" yaml:"appId"`
 	DefaultAction       string         `json:"defaultAction" yaml:"defaultAction"`
@@ -205,14 +155,14 @@ type AppPolicySpec struct {
 	AppOperationActions []AppOperation `json:"operations" yaml:"operations"`
 }
 
-// AppOperation defines the data structure for each app operation.
+// AppOperation 定义每个应用程序操作的数据结构。
 type AppOperation struct {
 	Operation string   `json:"name" yaml:"name"`
 	HTTPVerb  []string `json:"httpVerb" yaml:"httpVerb"`
 	Action    string   `json:"action" yaml:"action"`
 }
 
-// AccessControlSpec is the spec object in ConfigurationSpec.
+// AccessControlSpec 是ConfigurationSpec中的spec对象。
 type AccessControlSpec struct {
 	DefaultAction string          `json:"defaultAction" yaml:"defaultAction"`
 	TrustDomain   string          `json:"trustDomain" yaml:"trustDomain"`
@@ -231,58 +181,30 @@ type MTLSSpec struct {
 	AllowedClockSkew string `json:"allowedClockSkew" yaml:"allowedClockSkew"`
 }
 
-// SpiffeID represents the separated fields in a spiffe id.
+// SpiffeID 表示spiffe id中分隔的字段。
 type SpiffeID struct {
 	TrustDomain string
 	Namespace   string
 	AppID       string
 }
 
-// FeatureSpec defines which preview features are enabled.
+// FeatureSpec 定义启用哪些预览功能。
 type FeatureSpec struct {
 	Name    Feature `json:"name" yaml:"name"`
 	Enabled bool    `json:"enabled" yaml:"enabled"`
 }
 
-// ComponentsSpec describes the configuration for Dapr components
-type ComponentsSpec struct {
-	// Denylist of component types that cannot be instantiated
-	Deny []string `json:"deny,omitempty" yaml:"deny,omitempty"`
-}
-
-// LoggingSpec defines the configuration for logging.
-type LoggingSpec struct {
-	// Configure API logging.
-	APILogging APILoggingSpec `json:"apiLogging,omitempty" yaml:"apiLogging,omitempty"`
-}
-
-// APILoggingSpec defines the configuration for API logging.
-type APILoggingSpec struct {
-	// Default value for enabling API logging. Sidecars can always override this by setting `--enable-api-logging` to true or false explicitly.
-	// The default value is false.
-	Enabled bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
-	// If true, health checks are not reported in API logs. Default: false.
-	// This option has no effect if API logging is disabled.
-	OmitHealthChecks bool `json:"omitHealthChecks,omitempty" yaml:"omitHealthChecks,omitempty"`
-}
-
-// LoadDefaultConfiguration returns the default config.
+// LoadDefaultConfiguration 返回默认配置。
 func LoadDefaultConfiguration() *Configuration {
 	return &Configuration{
 		Spec: ConfigurationSpec{
-			TracingSpec: TracingSpec{
+			TracingSpec: TracingSpec{ // 追踪
 				SamplingRate: "",
-				Otel: OtelSpec{
-					IsSecure: true,
-				},
 			},
-			MetricSpec: MetricSpec{
+			MetricSpec: MetricSpec{ // 指标监控
 				Enabled: true,
 			},
-			MetricsSpec: MetricSpec{
-				Enabled: true,
-			},
-			AccessControlSpec: AccessControlSpec{
+			AccessControlSpec: AccessControlSpec{ //访问控制
 				DefaultAction: AllowAccess,
 				TrustDomain:   "public",
 			},
@@ -290,7 +212,7 @@ func LoadDefaultConfiguration() *Configuration {
 	}
 }
 
-// LoadStandaloneConfiguration gets the path to a config file and loads it into a configuration.
+// LoadStandaloneConfiguration 获得一个配置文件的路径，并将其加载到一个配置中。
 func LoadStandaloneConfiguration(config string) (*Configuration, string, error) {
 	_, err := os.Stat(config)
 	if err != nil {
@@ -302,75 +224,87 @@ func LoadStandaloneConfiguration(config string) (*Configuration, string, error) 
 		return nil, "", err
 	}
 
-	// Parse environment variables from yaml
+	// 从yaml中解析环境变量,将环境变量中的值 替换yaml文件中的变量
 	b = []byte(os.ExpandEnv(string(b)))
 
+	// 加载默认配置
 	conf := LoadDefaultConfiguration()
 	err = yaml.Unmarshal(b, conf)
 	if err != nil {
 		return nil, string(b), err
 	}
+	// 验证secret的配置，如果存在的话，对允许和拒绝的列表进行排序。
 	err = sortAndValidateSecretsConfiguration(conf)
 	if err != nil {
 		return nil, string(b), err
 	}
 
-	sortMetricsSpec(conf)
 	return conf, string(b), nil
 }
 
-// LoadKubernetesConfiguration gets configuration from the Kubernetes operator with a given name.
-func LoadKubernetesConfiguration(config, namespace string, podName string, operatorClient operatorv1pb.OperatorClient) (*Configuration, error) {
-	resp, err := operatorClient.GetConfiguration(context.Background(), &operatorv1pb.GetConfigurationRequest{
-		Name:      config,
-		Namespace: namespace,
-		PodName:   podName,
-	}, grpcRetry.WithMax(operatorMaxRetries), grpcRetry.WithPerRetryTimeout(operatorCallTimeout))
+// LoadKubernetesConfiguration 从Kubernetes运营商那里获得配置，并给定一个名称
+func LoadKubernetesConfiguration(config, namespace string, operatorClient operatorv1pb.OperatorClient) (*Configuration, error) {
+	// todo 这个文件到底有什么功能啊,都找不到在哪里创建的
+	//apiVersion: dapr.io/v1alpha1
+	//kind: Configuration
+	//metadata:
+	//  annotations:
+	//      manager: kubectl-client-side-apply
+	//      operation: Update
+	//  name: appconfig
+	//  namespace: mesoid
+	//spec:
+	//  metric:
+	//    enabled: true
+	//  tracing:
+	//    samplingRate: '1'
+	//    zipkin:
+	//      endpointAddress: 'http://zipkin.mesoid.svc.cluster.local:9411/api/v2/spans'
+
+	// 这里与 operator 进行了通信
+	// controlPlaneAddress dapr-api.dapr-system.svc.cluster.local:80
+	// todo 待看
+	resp, err := operatorClient.GetConfiguration(context.Background(),
+		&operatorv1pb.GetConfigurationRequest{
+			Name:      config,
+			Namespace: namespace,
+		},
+		grpc_retry.WithMax(operatorMaxRetries),              // 重试次数
+		grpc_retry.WithPerRetryTimeout(operatorCallTimeout), // 每次连接超时时间
+	)
 	if err != nil {
 		return nil, err
 	}
 	if resp.GetConfiguration() == nil {
-		return nil, fmt.Errorf("configuration %s not found", config)
+		return nil, errors.Errorf("configuration %s not found", config)
 	}
-	conf := LoadDefaultConfiguration()
-	err = json.Unmarshal(resp.GetConfiguration(), conf)
+	conf := LoadDefaultConfiguration()                  // 加载默认配置
+	err = json.Unmarshal(resp.GetConfiguration(), conf) // 会覆写
 	if err != nil {
 		return nil, err
 	}
 
-	err = sortAndValidateSecretsConfiguration(conf)
+	err = sortAndValidateSecretsConfiguration(conf) // 排序和验证 秘钥 配置
 	if err != nil {
 		return nil, err
 	}
 
-	sortMetricsSpec(conf)
 	return conf, nil
 }
 
-// Apply .metrics if set. If not, retain .metric.
-func sortMetricsSpec(conf *Configuration) {
-	if !conf.Spec.MetricsSpec.Enabled {
-		conf.Spec.MetricSpec.Enabled = false
-	}
-
-	if len(conf.Spec.MetricsSpec.Rules) > 0 {
-		conf.Spec.MetricSpec.Rules = conf.Spec.MetricsSpec.Rules
-	}
-}
-
-// Validate the secrets configuration and sort to the allowed and denied lists if present.
+// 验证secret的配置，如果存在的话，对允许和拒绝的列表进行排序。
 func sortAndValidateSecretsConfiguration(conf *Configuration) error {
 	scopes := conf.Spec.Secrets.Scopes
 	set := sets.NewString()
 	for _, scope := range scopes {
 		// validate scope
 		if set.Has(scope.StoreName) {
-			return fmt.Errorf("%q storeName is repeated in secrets configuration", scope.StoreName)
+			return errors.Errorf("%q storeName is repeated in secrets configuration", scope.StoreName)
 		}
 		if scope.DefaultAccess != "" &&
 			!strings.EqualFold(scope.DefaultAccess, AllowAccess) &&
 			!strings.EqualFold(scope.DefaultAccess, DenyAccess) {
-			return fmt.Errorf("defaultAccess %q can be either allow or deny", scope.DefaultAccess)
+			return errors.Errorf("defaultAccess %q can be either allow or deny", scope.DefaultAccess)
 		}
 		set.Insert(scope.StoreName)
 
@@ -382,68 +316,40 @@ func sortAndValidateSecretsConfiguration(conf *Configuration) error {
 	return nil
 }
 
-// IsSecretAllowed Check if the secret is allowed to be accessed.
+// IsSecretAllowed 检查是否允许访问这个secret
 func (c SecretsScope) IsSecretAllowed(key string) bool {
-	// By default, set allow access for the secret store.
-	access := AllowAccess
-	// Check and set deny access.
+	var access string = AllowAccess
 	if strings.EqualFold(c.DefaultAccess, DenyAccess) {
 		access = DenyAccess
 	}
 
-	// If the allowedSecrets list is not empty then check if the access is specifically allowed for this key.
+	// 如果allowwedsecrets列表不为空，那么检查是否特别允许对该密钥进行访问。
 	if len(c.AllowedSecrets) != 0 {
 		return containsKey(c.AllowedSecrets, key)
 	}
 
-	// Check key in deny list if deny list is present for the secret store.
-	// If the specific key is denied, then alone deny access.
+	// 如果秘密存储中存在拒绝列表，请在拒绝列表中检查密钥。如果指定的密钥被拒绝，则单独拒绝访问。
 	if deny := containsKey(c.DeniedSecrets, key); deny {
 		return !deny
 	}
 
-	// Check if defined default access is allow.
+	// 检查是否允许定义的默认访问。
 	return access == AllowAccess
 }
 
-// Runs Binary Search on a sorted list of strings to find a key.
+// 在一个排序的字符串列表上运行二进制搜索，以找到一个键。
 func containsKey(s []string, key string) bool {
 	index := sort.SearchStrings(s, key)
 
 	return index < len(s) && s[index] == key
 }
 
-// LoadFeatures loads the list of enabled features, from the Configuration spec and from the buildinfo.
-func (c *Configuration) LoadFeatures() {
-	forced := buildinfo.Features()
-	c.featuresEnabled = make(map[Feature]struct{}, len(c.Spec.Features)+len(forced))
-	for _, feature := range c.Spec.Features {
-		if feature.Name == "" || !feature.Enabled {
-			continue
+//IsFeatureEnabled 是否启用了该功能
+func IsFeatureEnabled(features []FeatureSpec, target Feature) bool {
+	for _, feature := range features {
+		if feature.Name == target {
+			return feature.Enabled
 		}
-		c.featuresEnabled[feature.Name] = struct{}{}
 	}
-	for _, v := range forced {
-		if v == "" {
-			continue
-		}
-		c.featuresEnabled[Feature(v)] = struct{}{}
-	}
-}
-
-// IsFeatureEnabled returns true if a Feature (such as a preview) is enabled.
-func (c Configuration) IsFeatureEnabled(target Feature) (enabled bool) {
-	_, enabled = c.featuresEnabled[target]
-	return enabled
-}
-
-// EnabledFeatures returns the list of features that have been enabled.
-func (c Configuration) EnabledFeatures() []string {
-	features := make([]string, len(c.featuresEnabled))
-	i := 0
-	for f := range c.featuresEnabled {
-		features[i] = string(f)
-		i++
-	}
-	return features[:i]
+	return false
 }

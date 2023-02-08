@@ -4,17 +4,17 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
-	"fmt"
 	"os"
 	"sync"
 	"time"
 
-	grpcMiddleware "github.com/grpc-ecosystem/go-grpc-middleware"
-	grpcRetry "github.com/grpc-ecosystem/go-grpc-middleware/retry"
+	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
+	grpc_retry "github.com/grpc-ecosystem/go-grpc-middleware/retry"
+	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	daprCredentials "github.com/dapr/dapr/pkg/credentials"
+	dapr_credentials "github.com/dapr/dapr/pkg/credentials"
 	diag "github.com/dapr/dapr/pkg/diagnostics"
 	sentryv1pb "github.com/dapr/dapr/pkg/proto/sentry/v1"
 )
@@ -23,15 +23,19 @@ const (
 	TLSServerName     = "cluster.local"
 	sentrySignTimeout = time.Second * 5
 	certType          = "CERTIFICATE"
-	kubeTknPath       = "/var/run/secrets/dapr.io/sentrytoken/token"
-	legacyKubeTknPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 	sentryMaxRetries  = 100
 )
+// k8s集群内部pod
+var kubeTknPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+func GetKubeTknPath() *string {
+	return &kubeTknPath
+}
 
 type Authenticator interface {
-	GetTrustAnchors() *x509.CertPool
-	GetCurrentSignedCert() *SignedCertificate
-	CreateSignedWorkloadCert(id, namespace, trustDomain string) (*SignedCertificate, error)
+	GetTrustAnchors() *x509.CertPool // 获得信任的锚点
+	GetCurrentSignedCert() *SignedCertificate // 获取当前签名了的证书
+	CreateSignedWorkloadCert(id, namespace, trustDomain string) (*SignedCertificate, error)// 创建签名负载证书
 }
 
 type authenticator struct {
@@ -45,10 +49,10 @@ type authenticator struct {
 }
 
 type SignedCertificate struct {
-	WorkloadCert  []byte
-	PrivateKeyPem []byte
-	Expiry        time.Time
-	TrustChain    *x509.CertPool
+	WorkloadCert  []byte // 签名后的证书
+	PrivateKeyPem []byte // 私钥
+	Expiry        time.Time // 过期的时间点
+	TrustChain    *x509.CertPool // 证书链
 }
 
 func newAuthenticator(sentryAddress string, trustAnchors *x509.CertPool, certChainPem, keyPem []byte, genCSRFunc func(id string) ([]byte, []byte, error)) Authenticator {
@@ -63,35 +67,37 @@ func newAuthenticator(sentryAddress string, trustAnchors *x509.CertPool, certCha
 }
 
 // GetTrustAnchors returns the extracted root cert that serves as the trust anchor.
+// 返回根证书。
 func (a *authenticator) GetTrustAnchors() *x509.CertPool {
 	return a.trustAnchors
 }
 
-// GetCurrentSignedCert returns the current and latest signed certificate.
+// GetCurrentSignedCert 返回当前的最新的签名的证书
 func (a *authenticator) GetCurrentSignedCert() *SignedCertificate {
 	a.certMutex.RLock()
 	defer a.certMutex.RUnlock()
 	return a.currentSignedCert
 }
 
-// CreateSignedWorkloadCert returns a signed workload certificate, the PEM encoded private key
-// And the duration of the signed cert.
+// CreateSignedWorkloadCert  返回一个签名的负载证书，PEM编码的私钥和签名证书的持续时间。
 func (a *authenticator) CreateSignedWorkloadCert(id, namespace, trustDomain string) (*SignedCertificate, error) {
-	csrb, pkPem, err := a.genCSRFunc(id)
+	//   pkg/runtime/security/security.go:64
+	// 证书签名 , EC 私钥
+	csrb, pkPem, err := a.genCSRFunc(id) // id ==APPID 会将它封装到DNSNAMES里  []string
 	if err != nil {
 		return nil, err
 	}
 	certPem := pem.EncodeToMemory(&pem.Block{Type: certType, Bytes: csrb})
 
-	config, err := daprCredentials.TLSConfigFromCertAndKey(a.certChainPem, a.keyPem, TLSServerName, a.trustAnchors)
+	config, err := dapr_credentials.TLSConfigFromCertAndKey(a.certChainPem, a.keyPem, TLSServerName, a.trustAnchors)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create tls config from cert and key: %w", err)
+		return nil, errors.Wrap(err, "failed to create tls config from cert and key")
 	}
 
-	unaryClientInterceptor := grpcRetry.UnaryClientInterceptor()
+	unaryClientInterceptor := grpc_retry.UnaryClientInterceptor()
 
 	if diag.DefaultGRPCMonitoring.IsEnabled() {
-		unaryClientInterceptor = grpcMiddleware.ChainUnaryClient(
+		unaryClientInterceptor = grpc_middleware.ChainUnaryClient(
 			unaryClientInterceptor,
 			diag.DefaultGRPCMonitoring.UnaryClientInterceptor(),
 		)
@@ -103,12 +109,14 @@ func (a *authenticator) CreateSignedWorkloadCert(id, namespace, trustDomain stri
 		grpc.WithUnaryInterceptor(unaryClientInterceptor))
 	if err != nil {
 		diag.DefaultMonitoring.MTLSWorkLoadCertRotationFailed("sentry_conn")
-		return nil, fmt.Errorf("error establishing connection to sentry: %w", err)
+		return nil, errors.Wrap(err, "error establishing connection to sentry")
 	}
 	defer conn.Close()
 
 	c := sentryv1pb.NewCAClient(conn)
-
+	// 签署证书,发送证书前
+	//  error validating requester identity: csr validation failed: invalid token: [invalid bearer token, Token has been invalidated]
+	//  error validating requester identity: csr validation failed: token/id mismatch. received id: dp-618b5e4aa5ebc3924db86860-workerapp-54683-7f8d646556-vf58h
 	resp, err := c.SignCertificate(context.Background(),
 		&sentryv1pb.SignCertificateRequest{
 			CertificateSigningRequest: certPem,
@@ -116,26 +124,27 @@ func (a *authenticator) CreateSignedWorkloadCert(id, namespace, trustDomain stri
 			Token:                     getToken(),
 			TrustDomain:               trustDomain,
 			Namespace:                 namespace,
-		}, grpcRetry.WithMax(sentryMaxRetries), grpcRetry.WithPerRetryTimeout(sentrySignTimeout))
+		}, grpc_retry.WithMax(sentryMaxRetries), grpc_retry.WithPerRetryTimeout(sentrySignTimeout))
 	if err != nil {
 		diag.DefaultMonitoring.MTLSWorkLoadCertRotationFailed("sign")
-		return nil, fmt.Errorf("error from sentry SignCertificate: %w", err)
+		return nil, errors.Wrap(err, "error from sentry SignCertificate")
 	}
 
-	workloadCert := resp.GetWorkloadCertificate()
-	validTimestamp := resp.GetValidUntil()
+	workloadCert := resp.GetWorkloadCertificate() // 签名以后的证书
+	validTimestamp := resp.GetValidUntil()        // 过期日期
 	if err = validTimestamp.CheckValid(); err != nil {
 		diag.DefaultMonitoring.MTLSWorkLoadCertRotationFailed("invalid_ts")
-		return nil, fmt.Errorf("error parsing ValidUntil: %w", err)
+		return nil, errors.Wrap(err, "error parsing ValidUntil")
 	}
-
+	// 类型转换
 	expiry := validTimestamp.AsTime()
+
 	trustChain := x509.NewCertPool()
 	for _, c := range resp.GetTrustChainCertificates() {
 		ok := trustChain.AppendCertsFromPEM(c)
 		if !ok {
 			diag.DefaultMonitoring.MTLSWorkLoadCertRotationFailed("chaining")
-			return nil, fmt.Errorf("failed adding trust chain cert to x509 CertPool: %w", err)
+			return nil, errors.Wrap(err, "failed adding trust chain cert to x509 CertPool")
 		}
 	}
 
@@ -153,16 +162,9 @@ func (a *authenticator) CreateSignedWorkloadCert(id, namespace, trustDomain stri
 	return signedCert, nil
 }
 
-// currently we support Kubernetes identities.
+// 目前我们支持Kubernetes的身份。
 func getToken() string {
-	b, err := os.ReadFile(kubeTknPath)
-	if err != nil && os.IsNotExist(err) {
-		// Attempt to use the legacy token if that exists
-		b, _ = os.ReadFile(legacyKubeTknPath)
-		if len(b) > 0 {
-			log.Warn("⚠️ daprd is initializing using the legacy service account token with access to Kubernetes APIs, which is discouraged. This usually happens when daprd is running against an older version of the Dapr control plane.")
-		}
-	}
+	b, _ := os.ReadFile(kubeTknPath)
 	return string(b)
 }
 

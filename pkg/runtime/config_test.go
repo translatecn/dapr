@@ -1,55 +1,20 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package runtime
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNewConfig(t *testing.T) {
 	publicPort := DefaultDaprPublicPort
-	c := NewRuntimeConfig(NewRuntimeConfigOpts{
-		ID:                           "app1",
-		PlacementAddresses:           []string{"localhost:5050"},
-		controlPlaneAddress:          "localhost:5051",
-		AllowedOrigins:               "*",
-		GlobalConfig:                 "config",
-		ComponentsPath:               "components",
-		AppProtocol:                  "http",
-		Mode:                         "kubernetes",
-		HTTPPort:                     3500,
-		InternalGRPCPort:             50002,
-		APIGRPCPort:                  50001,
-		APIListenAddresses:           []string{"1.2.3.4"},
-		PublicPort:                   &publicPort,
-		AppPort:                      8080,
-		ProfilePort:                  7070,
-		EnableProfiling:              true,
-		MaxConcurrency:               1,
-		MTLSEnabled:                  true,
-		SentryAddress:                "localhost:5052",
-		AppSSL:                       true,
-		MaxRequestBodySize:           4,
-		UnixDomainSocket:             "",
-		ReadBufferSize:               4,
-		GracefulShutdownDuration:     time.Second,
-		EnableAPILogging:             true,
-		DisableBuiltinK8sSecretStore: true,
-	})
+	c := NewRuntimeConfig("app1", []string{"localhost:5050"}, "localhost:5051", "*", "config", "components", "http", "kubernetes",
+		3500, 50002, 50001, []string{"1.2.3.4"}, &publicPort, 8080, 7070, true, 1, true, "localhost:5052", true, 4, "", 4, true)
 
 	assert.Equal(t, "app1", c.ID)
 	assert.Equal(t, "localhost:5050", c.PlacementAddresses[0])
@@ -74,7 +39,5 @@ func TestNewConfig(t *testing.T) {
 	assert.Equal(t, 4, c.MaxRequestBodySize)
 	assert.Equal(t, "", c.UnixDomainSocket)
 	assert.Equal(t, 4, c.ReadBufferSize)
-	assert.Equal(t, time.Second, c.GracefulShutdownDuration)
-	assert.Equal(t, true, c.EnableAPILogging)
-	assert.Equal(t, true, c.DisableBuiltinK8sSecretStore)
+	assert.Equal(t, true, c.StreamRequestBody)
 }

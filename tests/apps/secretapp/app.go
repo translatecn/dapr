@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package main
 
@@ -23,19 +15,17 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-
-	"github.com/dapr/dapr/tests/apps/utils"
 )
 
 const appPort = 3000
 
 // kubernetes is the name of the secret store
 const (
+	secretStore      = "kubernetes"
+	nonexistentStore = "nonexistent"
 	/* #nosec */
 	secretURL = "http://localhost:3500/v1.0/secrets/%s/%s?metadata.namespace=dapr-tests"
 )
-
-var httpClient = utils.NewHTTPClient()
 
 // daprSecret represents a secret in Dapr.
 type daprSecret struct {
@@ -69,7 +59,7 @@ func get(key, store string) (*map[string]string, int, error) {
 	log.Printf("Fetching state from %s", url)
 	// url is created from user input, it is OK since this is a test app only and will not run in prod.
 	/* #nosec */
-	res, err := httpClient.Get(url)
+	res, err := http.Get(url)
 	if err != nil {
 		return nil, http.StatusInternalServerError, fmt.Errorf("could not get value for key %s from Dapr: %s", key, err.Error())
 	}
@@ -87,7 +77,7 @@ func get(key, store string) (*map[string]string, int, error) {
 
 	log.Printf("Found secret for key %s: %s", key, body)
 
-	state := map[string]string{}
+	var state = map[string]string{}
 	if len(body) == 0 {
 		return nil, http.StatusOK, nil
 	}
@@ -105,7 +95,7 @@ func getAll(secrets []daprSecret) ([]daprSecret, int, error) {
 	statusCode := http.StatusOK
 	log.Printf("Processing get request for %d states.", len(secrets))
 
-	output := make([]daprSecret, 0, len(secrets))
+	var output = make([]daprSecret, 0, len(secrets))
 	for _, secret := range secrets {
 		value, sc, err := get(secret.Key, secret.Store)
 		if err != nil {
@@ -142,8 +132,8 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res := requestResponse{}
-	uri := r.URL.RequestURI()
+	var res = requestResponse{}
+	var uri = r.URL.RequestURI()
 	var secrets []daprSecret
 	var statusCode int
 
@@ -192,9 +182,6 @@ func epoch() int {
 func appRouter() *mux.Router {
 	router := mux.NewRouter().StrictSlash(true)
 
-	// Log requests and their processing time
-	router.Use(utils.LoggerMiddleware)
-
 	router.HandleFunc("/", indexHandler).Methods("GET")
 	router.HandleFunc("/test/{command}", handler).Methods("POST")
 
@@ -206,5 +193,6 @@ func appRouter() *mux.Router {
 func main() {
 	log.Printf("Secret App - listening on http://localhost:%d", appPort)
 	log.Printf("Secret endpoint - to be saved at %s", secretURL)
-	utils.StartServer(appPort, appRouter, true, false)
+
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", appPort), appRouter()))
 }

@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package main
 
@@ -19,30 +11,20 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
 	"sync"
 
-	"google.golang.org/protobuf/types/known/anypb"
-	"google.golang.org/protobuf/types/known/emptypb"
+	"github.com/golang/protobuf/ptypes/any"
+	"github.com/golang/protobuf/ptypes/empty"
 
 	commonv1pb "github.com/dapr/dapr/pkg/proto/common/v1"
-	runtimev1pb "github.com/dapr/dapr/pkg/proto/runtime/v1"
+	pb "github.com/dapr/dapr/pkg/proto/runtime/v1"
 
 	"google.golang.org/grpc"
 )
 
 const (
-	appPort                 = "3000"
-	DaprTestGRPCTopicEnvVar = "DAPR_TEST_GRPC_TOPIC_NAME"
+	appPort = "3000"
 )
-
-var topicName = "test-topic-grpc"
-
-func init() {
-	if envTopicName := os.Getenv(DaprTestGRPCTopicEnvVar); len(envTopicName) != 0 {
-		topicName = envTopicName
-	}
-}
 
 // server is our user app.
 type server struct{}
@@ -85,7 +67,7 @@ func (m *messageBuffer) fail(failedMessage string) bool {
 	return false
 }
 
-var messages = messageBuffer{
+var messages messageBuffer = messageBuffer{
 	lock:            &sync.RWMutex{},
 	successMessages: []string{},
 }
@@ -107,7 +89,7 @@ func main() {
 
 	/* #nosec */
 	s := grpc.NewServer()
-	runtimev1pb.RegisterAppCallbackServer(s, &server{})
+	pb.RegisterAppCallbackServer(s, &server{})
 
 	log.Println("Client starting...")
 
@@ -116,7 +98,6 @@ func main() {
 	}
 }
 
-//nolint:forbidigo
 func (s *server) OnInvoke(ctx context.Context, in *commonv1pb.InvokeRequest) (*commonv1pb.InvokeResponse, error) {
 	fmt.Printf("Got invoked method %s and data: %s\n", in.Method, string(in.GetData().Value))
 
@@ -140,7 +121,7 @@ func (s *server) GetReceivedTopics(ctx context.Context, in *commonv1pb.InvokeReq
 		log.Printf("Could not encode response: %s", err.Error())
 		return &commonv1pb.InvokeResponse{}, err
 	}
-	data := anypb.Any{
+	data := any.Any{
 		Value: rawResp,
 	}
 	return &commonv1pb.InvokeResponse{
@@ -149,15 +130,15 @@ func (s *server) GetReceivedTopics(ctx context.Context, in *commonv1pb.InvokeReq
 }
 
 // Dapr will call this method to get the list of topics the app wants to subscribe to.
-func (s *server) ListTopicSubscriptions(ctx context.Context, in *emptypb.Empty) (*runtimev1pb.ListTopicSubscriptionsResponse, error) {
+func (s *server) ListTopicSubscriptions(ctx context.Context, in *empty.Empty) (*pb.ListTopicSubscriptionsResponse, error) {
 	log.Println("List Topic Subscription called")
-	return &runtimev1pb.ListTopicSubscriptionsResponse{
-		Subscriptions: []*runtimev1pb.TopicSubscription{},
+	return &pb.ListTopicSubscriptionsResponse{
+		Subscriptions: []*pb.TopicSubscription{},
 	}, nil
 }
 
 // This method is fired whenever a message has been published to a topic that has been subscribed. Dapr sends published messages in a CloudEvents 1.0 envelope.
-func (s *server) OnTopicEvent(ctx context.Context, in *runtimev1pb.TopicEventRequest) (*runtimev1pb.TopicEventResponse, error) {
+func (s *server) OnTopicEvent(ctx context.Context, in *pb.TopicEventRequest) (*pb.TopicEventResponse, error) {
 	log.Printf("Message arrived - Topic: %s, Message: %s\n", in.Topic, string(in.Data))
 
 	var message string
@@ -165,33 +146,31 @@ func (s *server) OnTopicEvent(ctx context.Context, in *runtimev1pb.TopicEventReq
 	log.Printf("Got message: %s", message)
 	if err != nil {
 		log.Printf("error parsing test-topic input binding payload: %s", err)
-		return &runtimev1pb.TopicEventResponse{}, nil
+		return &pb.TopicEventResponse{}, nil
 	}
 	if fail := messages.fail(message); fail {
 		// simulate failure. fail only for the first time.
 		log.Print("failing message")
-		return &runtimev1pb.TopicEventResponse{}, nil
+		return &pb.TopicEventResponse{}, nil
 	}
 	messages.add(message)
 
-	return &runtimev1pb.TopicEventResponse{
-		Status: runtimev1pb.TopicEventResponse_SUCCESS, //nolint:nosnakecase
+	return &pb.TopicEventResponse{
+		Status: pb.TopicEventResponse_SUCCESS,
 	}, nil
 }
 
-func (s *server) ListInputBindings(ctx context.Context, in *emptypb.Empty) (*runtimev1pb.ListInputBindingsResponse, error) {
+func (s *server) ListInputBindings(ctx context.Context, in *empty.Empty) (*pb.ListInputBindingsResponse, error) {
 	log.Println("List Input Bindings called")
-	return &runtimev1pb.ListInputBindingsResponse{
+	return &pb.ListInputBindingsResponse{
 		Bindings: []string{
-			topicName,
+			"test-topic-grpc",
 		},
 	}, nil
 }
 
 // This method gets invoked every time a new event is fired from a registered binding. The message carries the binding name, a payload and optional metadata.
-//
-//nolint:forbidigo
-func (s *server) OnBindingEvent(ctx context.Context, in *runtimev1pb.BindingEventRequest) (*runtimev1pb.BindingEventResponse, error) {
+func (s *server) OnBindingEvent(ctx context.Context, in *pb.BindingEventRequest) (*pb.BindingEventResponse, error) {
 	fmt.Printf("Invoked from binding: %s - %s\n", in.Name, string(in.Data))
-	return &runtimev1pb.BindingEventResponse{}, nil
+	return &pb.BindingEventResponse{}, nil
 }

@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package components
 
@@ -18,11 +10,11 @@ import (
 	"encoding/json"
 	"time"
 
-	grpcRetry "github.com/grpc-ecosystem/go-grpc-middleware/retry"
+	grpc_retry "github.com/grpc-ecosystem/go-grpc-middleware/retry"
 
 	"github.com/dapr/kit/logger"
 
-	componentsV1alpha1 "github.com/dapr/dapr/pkg/apis/components/v1alpha1"
+	components_v1alpha1 "github.com/dapr/dapr/pkg/apis/components/v1alpha1"
 	config "github.com/dapr/dapr/pkg/config/modes"
 	operatorv1pb "github.com/dapr/dapr/pkg/proto/operator/v1"
 )
@@ -34,39 +26,45 @@ const (
 	operatorMaxRetries  = 100
 )
 
-// KubernetesComponents loads components in a kubernetes environment.
+// KubernetesComponents 在kubernetes环境中加载组件。
 type KubernetesComponents struct {
 	config    config.KubernetesConfig
 	client    operatorv1pb.OperatorClient
 	namespace string
-	podName   string
 }
 
-// NewKubernetesComponents returns a new kubernetes loader.
-func NewKubernetesComponents(configuration config.KubernetesConfig, namespace string, operatorClient operatorv1pb.OperatorClient, podName string) *KubernetesComponents {
+// NewKubernetesComponents 返回k8s组件的加载器  【ControlPlaneAddress ，127.0.0.1：6500】
+// mesoid, ControlPlaneAddress连接的客户端
+func NewKubernetesComponents(configuration config.KubernetesConfig, namespace string, operatorClient operatorv1pb.OperatorClient) *KubernetesComponents {
 	return &KubernetesComponents{
 		config:    configuration,
 		client:    operatorClient,
 		namespace: namespace,
-		podName:   podName,
 	}
 }
 
-// LoadComponents returns components from a given control plane address.
-func (k *KubernetesComponents) LoadComponents() ([]componentsV1alpha1.Component, error) {
-	resp, err := k.client.ListComponents(context.Background(), &operatorv1pb.ListComponentsRequest{
-		Namespace: k.namespace,
-		PodName:   k.podName,
-	}, grpcRetry.WithMax(operatorMaxRetries), grpcRetry.WithPerRetryTimeout(operatorCallTimeout))
+// LoadComponents // 返回一个给定控制面地址的客户端。 从operator加载组件
+func (k *KubernetesComponents) LoadComponents() ([]components_v1alpha1.Component, error) {
+	// 获取所有自定义资源
+	// dapr.io/Components
+	// operator 客户端
+	resp, err := k.client.ListComponents(
+		context.Background(),
+		&operatorv1pb.ListComponentsRequest{
+			Namespace: k.namespace,
+		},
+		grpc_retry.WithMax(operatorMaxRetries),
+		grpc_retry.WithPerRetryTimeout(operatorCallTimeout),
+	)
 	if err != nil {
 		return nil, err
 	}
 	comps := resp.GetComponents()
 
-	components := []componentsV1alpha1.Component{}
+	components := []components_v1alpha1.Component{}
 	for _, c := range comps {
-		var component componentsV1alpha1.Component
-		component.Spec = componentsV1alpha1.ComponentSpec{}
+		var component components_v1alpha1.Component
+		component.Spec = components_v1alpha1.ComponentSpec{}
 		err := json.Unmarshal(c, &component)
 		if err != nil {
 			log.Warnf("error deserializing component: %s", err)
@@ -76,3 +74,19 @@ func (k *KubernetesComponents) LoadComponents() ([]componentsV1alpha1.Component,
 	}
 	return components, nil
 }
+//apiVersion: dapr.io/v1alpha1
+//kind: Component
+//metadata:
+//  name: statestore
+//  namespace: liushuo
+//  uid: 91d1b0a0-684f-4f1e-814d-8240bc7f24f3
+//spec:
+//  metadata:
+//    - name: redisHost
+//      value: 'redis:6379'
+//    - name: redisPassword
+//      value: ''
+//  type: state.redis
+//  version: v1
+//auth:
+//  secretStore: kubernetes

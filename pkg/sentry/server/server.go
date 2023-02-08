@@ -3,14 +3,16 @@ package server
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"net"
 	"time"
 
+	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/dapr/kit/logger"
 
 	sentryv1pb "github.com/dapr/dapr/pkg/proto/sentry/v1"
 	"github.com/dapr/dapr/pkg/sentry/ca"
@@ -18,7 +20,6 @@ import (
 	"github.com/dapr/dapr/pkg/sentry/csr"
 	"github.com/dapr/dapr/pkg/sentry/identity"
 	"github.com/dapr/dapr/pkg/sentry/monitoring"
-	"github.com/dapr/kit/logger"
 )
 
 const (
@@ -27,7 +28,7 @@ const (
 
 var log = logger.NewLogger("dapr.sentry.server")
 
-// CAServer is an interface for the Certificate Authority server.
+// CAServer 是证书颁发机构服务器的一个接口。
 type CAServer interface {
 	Run(port int, trustBundle ca.TrustRootBundler) error
 	Shutdown()
@@ -40,7 +41,7 @@ type server struct {
 	validator   identity.Validator
 }
 
-// NewCAServer returns a new CA Server running a gRPC server.
+// NewCAServer 返回一个运行gRPC服务器的新CA服务器。
 func NewCAServer(ca ca.CertificateAuthority, validator identity.Validator) CAServer {
 	return &server{
 		certAuth:  ca,
@@ -48,13 +49,13 @@ func NewCAServer(ca ca.CertificateAuthority, validator identity.Validator) CASer
 	}
 }
 
-// Run starts a secured gRPC server for the Sentry Certificate Authority.
-// It enforces client side cert validation using the trust root cert.
+// Run 为Sentry证书颁发机构启动一个安全的gRPC服务器。
+// 它使用信任的根证书强制执行客户端的证书验证。
 func (s *server) Run(port int, trustBundler ca.TrustRootBundler) error {
-	addr := fmt.Sprintf(":%d", port)
+	addr := fmt.Sprintf(":%v", port)
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("could not listen on %s: %w", addr, err)
+		return errors.Wrapf(err, "could not listen on %s", addr)
 	}
 
 	tlsOpt := s.tlsServerOption(trustBundler)
@@ -62,7 +63,7 @@ func (s *server) Run(port int, trustBundler ca.TrustRootBundler) error {
 	sentryv1pb.RegisterCAServer(s.srv, s)
 
 	if err := s.srv.Serve(lis); err != nil {
-		return fmt.Errorf("grpc serve error: %w", err)
+		return errors.Wrap(err, "grpc serve error")
 	}
 	return nil
 }
@@ -70,7 +71,7 @@ func (s *server) Run(port int, trustBundler ca.TrustRootBundler) error {
 func (s *server) tlsServerOption(trustBundler ca.TrustRootBundler) grpc.ServerOption {
 	cp := trustBundler.GetTrustAnchors()
 
-	//nolint:gosec
+	// nolint:gosec
 	config := &tls.Config{
 		ClientCAs: cp,
 		// Require cert verification
@@ -81,7 +82,7 @@ func (s *server) tlsServerOption(trustBundler ca.TrustRootBundler) grpc.ServerOp
 				if err != nil {
 					monitoring.ServerCertIssueFailed("server_cert")
 					log.Error(err)
-					return nil, fmt.Errorf("failed to get TLS server certificate: %w", err)
+					return nil, errors.Wrap(err, "failed to get TLS server certificate")
 				}
 				s.certificate = cert
 			}
@@ -92,28 +93,26 @@ func (s *server) tlsServerOption(trustBundler ca.TrustRootBundler) grpc.ServerOp
 }
 
 func (s *server) getServerCertificate() (*tls.Certificate, error) {
+	// 生成新的证书签名文件、私钥文件
 	csrPem, pkPem, err := csr.GenerateCSR("", false)
 	if err != nil {
 		return nil, err
 	}
 
 	now := time.Now().UTC()
+	// CA证书的过期时间
 	issuerExp := s.certAuth.GetCACertBundle().GetIssuerCertExpiry()
-	if issuerExp == nil {
-		return nil, errors.New("could not find expiration in issuer certificate")
-	}
 	serverCertTTL := issuerExp.Sub(now)
-
+	//	证书申请: csrCert,	 证书:     certPem,
 	resp, err := s.certAuth.SignCSR(csrPem, s.certAuth.GetCACertBundle().GetTrustDomain(), nil, serverCertTTL, false)
 	if err != nil {
 		return nil, err
 	}
 
-	certPem := resp.CertPEM
-	certPem = append(certPem, s.certAuth.GetCACertBundle().GetIssuerCertPem()...)
-	if rootCertPem := s.certAuth.GetCACertBundle().GetRootCertPem(); len(rootCertPem) > 0 {
-		certPem = append(certPem, rootCertPem...)
-	}
+	certPem := resp.CertPEM // 新生成的证书
+	// 以下的证书都是CA， 都设置了ISCA:true
+	certPem = append(certPem, s.certAuth.GetCACertBundle().GetIssuerCertPem()...) // 使用此证书进行的签名
+	certPem = append(certPem, s.certAuth.GetCACertBundle().GetRootCertPem()...)
 
 	cert, err := tls.X509KeyPair(certPem, pkPem)
 	if err != nil {
@@ -123,42 +122,42 @@ func (s *server) getServerCertificate() (*tls.Certificate, error) {
 	return &cert, nil
 }
 
-// SignCertificate handles CSR requests originating from Dapr sidecars.
-// The method receives a request with an identity and initial cert and returns
-// A signed certificate including the trust chain to the caller along with an expiry date.
+// SignCertificate 处理来自Dapr sidecar 的CSR请求。
+// 该方法接收一个带有身份和初始证书的请求 并返回一个包括信任链的签名证书给调用者，并附上一个到期日。
 func (s *server) SignCertificate(ctx context.Context, req *sentryv1pb.SignCertificateRequest) (*sentryv1pb.SignCertificateResponse, error) {
 	monitoring.CertSignRequestReceived()
-
+	// 获取签名申请的字节数据
 	csrPem := req.GetCertificateSigningRequest()
-
+	// CertificateRequest
 	csr, err := certs.ParsePemCSR(csrPem)
 	if err != nil {
-		err = fmt.Errorf("cannot parse certificate signing request pem: %w", err)
+		err = errors.Wrap(err, "cannot parse certificate signing request pem")
 		log.Error(err)
 		monitoring.CertSignFailed("cert_parse")
 		return nil, err
 	}
-
+	// cn字段不能为空
 	err = s.certAuth.ValidateCSR(csr)
 	if err != nil {
-		err = fmt.Errorf("error validating csr: %w", err)
+		err = errors.Wrap(err, "error validating csr")
 		log.Error(err)
 		monitoring.CertSignFailed("cert_validation")
 		return nil, err
 	}
 
+	// 不能为空,校验token是不是这个id的
 	err = s.validator.Validate(req.GetId(), req.GetToken(), req.GetNamespace())
 	if err != nil {
-		err = fmt.Errorf("error validating requester identity: %w", err)
+		err = errors.Wrap(err, "error validating requester identity")
 		log.Error(err)
 		monitoring.CertSignFailed("req_id_validation")
 		return nil, err
 	}
-
+	//
 	identity := identity.NewBundle(csr.Subject.CommonName, req.GetNamespace(), req.GetTrustDomain())
 	signed, err := s.certAuth.SignCSR(csrPem, csr.Subject.CommonName, identity, -1, false)
 	if err != nil {
-		err = fmt.Errorf("error signing csr: %w", err)
+		err = errors.Wrap(err, "error signing csr")
 		log.Error(err)
 		monitoring.CertSignFailed("cert_sign")
 		return nil, err
@@ -169,9 +168,7 @@ func (s *server) SignCertificate(ctx context.Context, req *sentryv1pb.SignCertif
 	rootCert := s.certAuth.GetCACertBundle().GetRootCertPem()
 
 	certPem = append(certPem, issuerCert...)
-	if len(rootCert) > 0 {
-		certPem = append(certPem, rootCert...)
-	}
+	certPem = append(certPem, rootCert...)
 
 	if len(certPem) == 0 {
 		err = errors.New("insufficient data in certificate signing request, no certs signed")
@@ -182,7 +179,7 @@ func (s *server) SignCertificate(ctx context.Context, req *sentryv1pb.SignCertif
 
 	expiry := timestamppb.New(signed.Certificate.NotAfter)
 	if err = expiry.CheckValid(); err != nil {
-		return nil, fmt.Errorf("could not validate certificate validity: %w", err)
+		return nil, errors.Wrap(err, "could not validate certificate validity")
 	}
 
 	resp := &sentryv1pb.SignCertificateResponse{
@@ -197,17 +194,16 @@ func (s *server) SignCertificate(ctx context.Context, req *sentryv1pb.SignCertif
 }
 
 func (s *server) Shutdown() {
-	if s.srv != nil {
-		s.srv.GracefulStop()
-	}
+	s.srv.Stop()
 }
 
+// 有没有过期
 func needsRefresh(cert *tls.Certificate, expiryBuffer time.Duration) bool {
 	leaf := cert.Leaf
 	if leaf == nil {
 		return true
 	}
 
-	// Check if the leaf certificate is about to expire.
+	//检查叶子证书是否即将过期。
 	return leaf.NotAfter.Add(-serverCertExpiryBuffer).Before(time.Now().UTC())
 }

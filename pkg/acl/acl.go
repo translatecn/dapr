@@ -1,17 +1,8 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
-//nolint:nosnakecase
 package acl
 
 import (
@@ -34,11 +25,12 @@ import (
 
 var log = logger.NewLogger("dapr.acl")
 
-// ParseAccessControlSpec creates an in-memory copy of the Access Control Spec for fast lookup.
+// ParseAccessControlSpec 在内存中创建访问控制规范的副本，以便快速查找。
+// 主要是控制同一名称空间下，不同应用间的访问规则
+// 因为accessControlSpec是从该namespace的自定义规则的appconfig里拿到的
 func ParseAccessControlSpec(accessControlSpec config.AccessControlSpec, protocol string) (*config.AccessControlList, error) {
-	if accessControlSpec.TrustDomain == "" &&
-		accessControlSpec.DefaultAction == "" &&
-		(accessControlSpec.AppPolicies == nil || len(accessControlSpec.AppPolicies) == 0) {
+
+	if accessControlSpec.TrustDomain == "" && accessControlSpec.DefaultAction == "" && (accessControlSpec.AppPolicies == nil || len(accessControlSpec.AppPolicies) == 0) {
 		// No ACL has been specified
 		log.Debugf("No Access control policy specified")
 		return nil, nil
@@ -56,11 +48,11 @@ func ParseAccessControlSpec(accessControlSpec config.AccessControlSpec, protocol
 	accessControlList.DefaultAction = accessControlSpec.DefaultAction
 	if accessControlSpec.DefaultAction == "" {
 		if accessControlSpec.AppPolicies == nil || len(accessControlSpec.AppPolicies) > 0 {
-			// Some app level policies have been specified but not default global action is set. Default to more secure option - Deny
+			// 一些应用程序级别的策略已被指定，但没有设置默认的全局行动。默认为更安全的选项 - 拒绝
 			log.Warnf("No global default action has been specified. Setting default global action as Deny")
 			accessControlList.DefaultAction = config.DenyAccess
 		} else {
-			// An empty ACL has been specified. Set default global action to Allow
+			// 已经指定了一个空的ACL。设置默认的全局动作为允许
 			accessControlList.DefaultAction = config.AllowAccess
 		}
 	}
@@ -88,25 +80,27 @@ func ParseAccessControlSpec(accessControlSpec config.AccessControlSpec, protocol
 			continue
 		}
 
-		operationPolicy := config.NewTrie()
+		operationPolicy := make(map[string]config.AccessControlListOperationAction)
 
 		// Iterate over all the operations and create a map for fast lookup
 		for _, appPolicy := range appPolicySpec.AppOperationActions {
 			// The operation name might be specified as /invoke/*
 			// Store the prefix as the key and use the remainder as post fix for faster lookups
 			// Also, prepend "/" in case it is missing in the operation name
-			operationName := appPolicy.Operation
-			if !strings.HasPrefix(operationName, "/") {
-				operationName = "/" + operationName
+			operation := appPolicy.Operation
+			if !strings.HasPrefix(operation, "/") {
+				operation = "/" + operation
 			}
+			operationPrefix, operationPostfix := getOperationPrefixAndPostfix(operation)
 
 			if protocol == config.HTTPProtocol {
-				operationName = strings.ToLower(operationName)
+				operationPrefix = strings.ToLower(operationPrefix)
+				operationPostfix = strings.ToLower(operationPostfix)
 			}
 
 			operationActions := config.AccessControlListOperationAction{
-				OperationName: operationName,
-				VerbAction:    make(map[string]string),
+				OperationPostFix: operationPostfix,
+				VerbAction:       make(map[string]string),
 			}
 
 			// Iterate over all the http verbs and create a map and set the action for fast lookup
@@ -117,7 +111,7 @@ func ParseAccessControlSpec(accessControlSpec config.AccessControlSpec, protocol
 			// Store the operation action for grpc invocations where no http verb is specified
 			operationActions.OperationAction = appPolicy.Action
 
-			operationPolicy.PutOperationAction(operationName, &operationActions)
+			operationPolicy[operationPrefix] = operationActions
 		}
 		aclPolicySpec := config.AccessControlListPolicySpec{
 			AppName:             appPolicySpec.AppName,
@@ -143,7 +137,7 @@ func ParseAccessControlSpec(accessControlSpec config.AccessControlSpec, protocol
 	return &accessControlList, nil
 }
 
-// GetAndParseSpiffeID retrieves the SPIFFE Id from the cert and parses it.
+// GetAndParseSpiffeID 检索证书中的SPIFFE Id，并对其进行解析。
 func GetAndParseSpiffeID(ctx context.Context) (*config.SpiffeID, error) {
 	spiffeID, err := getSpiffeID(ctx)
 	if err != nil {
@@ -341,14 +335,30 @@ func IsOperationAllowedByAccessControlPolicy(spiffeID *config.SpiffeID, srcAppID
 		inputOperation = "/" + inputOperation
 	}
 
+	inputOperationPrefix, inputOperationPostfix := getOperationPrefixAndPostfix(inputOperation)
+
 	// If HTTP, make case-insensitive
 	if appProtocol == config.HTTPProtocol {
-		inputOperation = strings.ToLower(inputOperation)
+		inputOperationPrefix = strings.ToLower(inputOperationPrefix)
+		inputOperationPostfix = strings.ToLower(inputOperationPostfix)
 	}
 
-	operationPolicy := appPolicy.AppOperationActions.Search(inputOperation)
+	// The acl may specify the operation in a format /invoke/*, get and match only the prefix first
+	operationPolicy, found := appPolicy.AppOperationActions[inputOperationPrefix]
+	if found {
+		// The ACL might have the operation specified as /invoke/*. Here "/*" is stored as the postfix.
+		// Match postfix
 
-	if operationPolicy != nil {
+		if strings.Contains(operationPolicy.OperationPostFix, "/*") {
+			if !strings.HasPrefix(inputOperationPostfix, strings.ReplaceAll(operationPolicy.OperationPostFix, "/*", "")) {
+				return isActionAllowed(action), actionPolicy
+			}
+		} else {
+			if operationPolicy.OperationPostFix != inputOperationPostfix {
+				return isActionAllowed(action), actionPolicy
+			}
+		}
+
 		// Operation prefix and postfix match. Now check the operation specific policy
 		if appProtocol == config.HTTPProtocol {
 			if httpVerb != commonv1pb.HTTPExtension_NONE {
@@ -383,4 +393,15 @@ func isActionAllowed(action string) bool {
 func getKeyForAppID(appID, namespace string) string {
 	key := appID + "||" + namespace
 	return key
+}
+
+// getOperationPrefixAndPostfix returns an app operation prefix and postfix.
+// The prefix can be stored in the in-memory ACL for fast lookup.
+// e.g.: /invoke/*, prefix = /invoke, postfix = /*.
+func getOperationPrefixAndPostfix(operation string) (string, string) {
+	operationParts := strings.Split(operation, "/")
+	operationPrefix := "/" + operationParts[1]
+	operationPostfix := "/" + strings.Join(operationParts[2:], "/")
+
+	return operationPrefix, operationPostfix
 }

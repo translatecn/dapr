@@ -1,26 +1,15 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package v1
 
 import (
-	"bytes"
 	"errors"
-	"io"
 	"strings"
 
 	"github.com/valyala/fasthttp"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	commonv1pb "github.com/dapr/dapr/pkg/proto/common/v1"
@@ -28,25 +17,22 @@ import (
 )
 
 const (
-	// DefaultAPIVersion is the default Dapr API version.
-	DefaultAPIVersion = internalv1pb.APIVersion_V1 //nolint:nosnakecase
+	// DefaultAPIVersion dapr api 版本
+	DefaultAPIVersion = internalv1pb.APIVersion_V1
 )
 
-// InvokeMethodRequest holds InternalInvokeRequest protobuf message
-// and provides the helpers to manage it.
+// InvokeMethodRequest 持有 InternalInvokeRequest protobuf消息，并提供帮助器来管理它。
 type InvokeMethodRequest struct {
-	replayableRequest
-
 	r *internalv1pb.InternalInvokeRequest
 }
 
-// NewInvokeMethodRequest creates InvokeMethodRequest object for method.
+// NewInvokeMethodRequest 为方法创建InvokeMethodRequest对象。
 func NewInvokeMethodRequest(method string) *InvokeMethodRequest {
 	return &InvokeMethodRequest{
 		r: &internalv1pb.InternalInvokeRequest{
 			Ver: DefaultAPIVersion,
 			Message: &commonv1pb.InvokeRequest{
-				Method: method,
+				Method: method, // 被调用法的方法,具体的执行逻辑
 			},
 		},
 	}
@@ -66,7 +52,7 @@ func FromInvokeRequestMessage(pb *commonv1pb.InvokeRequest) *InvokeMethodRequest
 func InternalInvokeRequest(pb *internalv1pb.InternalInvokeRequest) (*InvokeMethodRequest, error) {
 	req := &InvokeMethodRequest{r: pb}
 	if pb.Message == nil {
-		return nil, errors.New("field Message is nil")
+		return nil, errors.New("Message field is nil")
 	}
 
 	return req, nil
@@ -84,7 +70,7 @@ func (imr *InvokeMethodRequest) WithMetadata(md map[string][]string) *InvokeMeth
 	return imr
 }
 
-// WithFastHTTPHeaders sets fasthttp request headers.
+// WithFastHTTPHeaders 将fast http 请求头 封装到内部的请求中
 func (imr *InvokeMethodRequest) WithFastHTTPHeaders(header *fasthttp.RequestHeader) *InvokeMethodRequest {
 	md := map[string][]string{}
 	header.VisitAll(func(key []byte, value []byte) {
@@ -94,38 +80,23 @@ func (imr *InvokeMethodRequest) WithFastHTTPHeaders(header *fasthttp.RequestHead
 	return imr
 }
 
-// WithRawData sets message data from a readable stream.
-func (imr *InvokeMethodRequest) WithRawData(data io.Reader) *InvokeMethodRequest {
-	imr.ResetMessageData()
-	imr.replayableRequest.WithRawData(data)
-	return imr
-}
-
-// WithRawDataBytes sets message data from a []byte.
-func (imr *InvokeMethodRequest) WithRawDataBytes(data []byte) *InvokeMethodRequest {
-	return imr.WithRawData(bytes.NewReader(data))
-}
-
-// WithRawDataString sets message data from a string.
-func (imr *InvokeMethodRequest) WithRawDataString(data string) *InvokeMethodRequest {
-	return imr.WithRawData(strings.NewReader(data))
-}
-
-// WithContentType sets the content type.
-func (imr *InvokeMethodRequest) WithContentType(contentType string) *InvokeMethodRequest {
+// WithRawData 设置消息的格式
+func (imr *InvokeMethodRequest) WithRawData(data []byte, contentType string) *InvokeMethodRequest {
+	if contentType == "" {
+		contentType = JSONContentType
+	}
 	imr.r.Message.ContentType = contentType
+	imr.r.Message.Data = &anypb.Any{Value: data}
 	return imr
 }
 
-// WithHTTPExtension sets new HTTP extension with verb and querystring.
-//
-//nolint:nosnakecase
+// WithHTTPExtension 设置http的请求方式和查询字符串
 func (imr *InvokeMethodRequest) WithHTTPExtension(verb string, querystring string) *InvokeMethodRequest {
 	httpMethod, ok := commonv1pb.HTTPExtension_Verb_value[strings.ToUpper(verb)]
 	if !ok {
+		// 如果请求方式不存在，就改成post
 		httpMethod = int32(commonv1pb.HTTPExtension_POST)
 	}
-
 	imr.r.Message.HttpExtension = &commonv1pb.HTTPExtension{
 		Verb:        commonv1pb.HTTPExtension_Verb(httpMethod),
 		Querystring: querystring,
@@ -149,142 +120,61 @@ func (imr *InvokeMethodRequest) WithCustomHTTPMetadata(md map[string]string) *In
 	return imr
 }
 
-// WithReplay enables replaying for the data stream.
-func (imr *InvokeMethodRequest) WithReplay(enabled bool) *InvokeMethodRequest {
-	// If the object has data in-memory, WithReplay is a nop
-	if !imr.HasMessageData() {
-		imr.replayableRequest.SetReplay(enabled)
-	}
-	return imr
-}
-
-// CanReplay returns true if the data stream can be replayed.
-func (imr *InvokeMethodRequest) CanReplay() bool {
-	// We can replay if:
-	// - The object has data in-memory
-	// - The request is replayable
-	return imr.HasMessageData() || imr.replayableRequest.CanReplay()
-}
-
 // EncodeHTTPQueryString generates querystring for http using http extension object.
 func (imr *InvokeMethodRequest) EncodeHTTPQueryString() string {
 	m := imr.r.Message
-	if m == nil || m.HttpExtension == nil {
+	if m == nil || m.GetHttpExtension() == nil {
 		return ""
 	}
 
-	return m.HttpExtension.Querystring
+	return m.GetHttpExtension().Querystring
 }
 
-// APIVersion gets API version of InvokeMethodRequest.
+// APIVersion 返回请求调用的 版本
 func (imr *InvokeMethodRequest) APIVersion() internalv1pb.APIVersion {
 	return imr.r.GetVer()
 }
 
-// Metadata gets Metadata of InvokeMethodRequest.
+// Metadata 返回 InvokeMethodRequest 的Metadata 字段
 func (imr *InvokeMethodRequest) Metadata() DaprInternalMetadata {
-	return imr.r.Metadata
+	return imr.r.GetMetadata()
 }
 
-// Proto returns InternalInvokeRequest Proto object.
+// Proto 返回 InternalInvokeRequest Proto 对象。
 func (imr *InvokeMethodRequest) Proto() *internalv1pb.InternalInvokeRequest {
 	return imr.r
 }
 
-// ProtoWithData returns a copy of the internal InternalInvokeRequest Proto object with the entire data stream read into the Data property.
-func (imr *InvokeMethodRequest) ProtoWithData() (*internalv1pb.InternalInvokeRequest, error) {
-	if imr.r == nil || imr.r.Message == nil {
-		return nil, errors.New("message is nil")
-	}
-
-	// If the data is already in-memory in the object, return the object directly.
-	// This doesn't copy the object, and that's fine because receivers are not expected to modify the received object.
-	// Only reason for cloning the object below is to make ProtoWithData concurrency-safe.
-	if imr.HasMessageData() {
-		return imr.r, nil
-	}
-
-	// Clone the object
-	m := proto.Clone(imr.r).(*internalv1pb.InternalInvokeRequest)
-
-	// Read the data and store it in the object
-	data, err := imr.RawDataFull()
-	if err != nil {
-		return m, err
-	}
-	m.Message.Data = &anypb.Any{
-		Value: data,
-	}
-
-	return m, nil
-}
-
-// Actor returns actor type and id.
+// Actor 返回actor类型和id。
 func (imr *InvokeMethodRequest) Actor() *internalv1pb.Actor {
-	return imr.r.Actor
+	return imr.r.GetActor()
 }
 
-// Message gets InvokeRequest Message object.
+// Message 返回调用请求的消息体
 func (imr *InvokeMethodRequest) Message() *commonv1pb.InvokeRequest {
 	return imr.r.Message
 }
 
-// HasMessageData returns true if the message object contains a slice of data buffered.
-func (imr *InvokeMethodRequest) HasMessageData() bool {
+// RawData 返回content_type和byte array body。
+func (imr *InvokeMethodRequest) RawData() (string, []byte) {
 	m := imr.r.Message
-	return m != nil && m.Data != nil && len(m.Data.Value) > 0
+	if m == nil || m.Data == nil {
+		return "", nil
+	}
+
+	contentType := m.GetContentType()       // application/json
+	dataTypeURL := m.GetData().GetTypeUrl() // ""
+	dataValue := m.GetData().GetValue()     // {"a": 800.2914473430634}
+
+	// 仅当typeurl未设置且数据已给定时，将content_type设置为application/json。
+	if contentType == "" && dataTypeURL == "" && dataValue != nil {
+		contentType = JSONContentType
+	}
+
+	return contentType, dataValue
 }
 
-// ResetMessageData resets the data inside the message object if present.
-func (imr *InvokeMethodRequest) ResetMessageData() {
-	if !imr.HasMessageData() {
-		return
-	}
-
-	imr.r.Message.Data.Reset()
-}
-
-// ContenType returns the content type of the message.
-func (imr *InvokeMethodRequest) ContentType() string {
-	m := imr.r.Message
-	if m == nil {
-		return ""
-	}
-
-	return m.GetContentType()
-}
-
-// RawData returns the stream body.
-// Note: this method is not safe for concurrent use.
-func (imr *InvokeMethodRequest) RawData() (r io.Reader) {
-	m := imr.r.Message
-	if m == nil {
-		return nil
-	}
-
-	// If the message has a data property, use that
-	if imr.HasMessageData() {
-		return bytes.NewReader(m.Data.Value)
-	}
-
-	return imr.replayableRequest.RawData()
-}
-
-// RawDataFull returns the entire data read from the stream body.
-func (imr *InvokeMethodRequest) RawDataFull() ([]byte, error) {
-	// If the message has a data property, use that
-	if imr.HasMessageData() {
-		return imr.r.Message.Data.Value, nil
-	}
-
-	r := imr.RawData()
-	if r == nil {
-		return nil, nil
-	}
-	return io.ReadAll(r)
-}
-
-// Adds a new header to the existing set.
+// AddHeaders Adds a new header to the existing set.
 func (imr *InvokeMethodRequest) AddHeaders(header *fasthttp.RequestHeader) {
 	md := map[string][]string{}
 	header.VisitAll(func(key []byte, value []byte) {

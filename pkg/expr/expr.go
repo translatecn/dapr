@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/checker/decls"
-	exprProto "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
+	expr_proto "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 )
 
 const missingVariableMessage = "undeclared reference to '"
@@ -15,12 +15,12 @@ type Expr struct {
 	expr    string
 	program cel.Program
 }
-
+// DecodeString todo
 func (e *Expr) DecodeString(value string) (err error) {
 	var ast *cel.Ast
 	var env *cel.Env
 
-	variables := make([]*exprProto.Decl, 0, 10)
+	variables := make([]*expr_proto.Decl, 0, 10)
 	found := make(map[string]struct{}, 10)
 
 	for {

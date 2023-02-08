@@ -1,15 +1,7 @@
-/*
-Copyright 2021 The Dapr Authors
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// ------------------------------------------------------------
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
+// Licensed under the MIT License.
+// ------------------------------------------------------------
 
 package main
 
@@ -19,13 +11,15 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/valyala/fasthttp"
 
 	"github.com/dapr/dapr/pkg/config"
-	"github.com/dapr/dapr/tests/apps/utils"
 )
 
 const (
@@ -55,7 +49,6 @@ type daprConfig struct {
 	DrainOngoingCallTimeout string                  `json:"drainOngoingCallTimeout,omitempty"`
 	DrainRebalancedActors   bool                    `json:"drainRebalancedActors,omitempty"`
 	Reentrancy              config.ReentrancyConfig `json:"reentrancy,omitempty"`
-	EntitiesConfig          []config.EntityConfig   `json:"entitiesConfig,omitempty"`
 }
 
 type reentrantRequest struct {
@@ -68,7 +61,7 @@ type actorCall struct {
 	Method    string `json:"method"`
 }
 
-var httpClient = utils.NewHTTPClient()
+var httpClient = newHTTPClient()
 
 var (
 	actorLogs      = []actorLogEntry{}
@@ -77,21 +70,12 @@ var (
 )
 
 var daprConfigResponse = daprConfig{
-	Entities:                []string{defaultActorType},
-	ActorIdleTimeout:        actorIdleTimeout,
-	ActorScanInterval:       actorScanInterval,
-	DrainOngoingCallTimeout: drainOngoingCallTimeout,
-	DrainRebalancedActors:   drainRebalancedActors,
-	Reentrancy:              config.ReentrancyConfig{Enabled: false},
-	EntitiesConfig: []config.EntityConfig{
-		{
-			Entities: []string{defaultActorType},
-			Reentrancy: config.ReentrancyConfig{
-				Enabled:       true,
-				MaxStackDepth: &maxStackDepth,
-			},
-		},
-	},
+	[]string{defaultActorType},
+	actorIdleTimeout,
+	actorScanInterval,
+	drainOngoingCallTimeout,
+	drainRebalancedActors,
+	config.ReentrancyConfig{Enabled: true, MaxStackDepth: &maxStackDepth},
 }
 
 func resetLogs() {
@@ -126,7 +110,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 
 func logsHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Processing dapr %s request for %s", r.Method, r.URL.RequestURI())
-	if r.Method == http.MethodDelete {
+	if r.Method == "DELETE" {
 		resetLogs()
 	}
 
@@ -155,7 +139,7 @@ func actorTestCallHandler(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(fasthttp.StatusInternalServerError)
 		return
 	}
 
@@ -168,12 +152,12 @@ func actorTestCallHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nextCall, nextBody := advanceCallStackForNextRequest(reentrantReq)
-	req, _ := http.NewRequest(http.MethodPut, fmt.Sprintf(actorMethodURLFormat, nextCall.ActorType, nextCall.ActorID, nextCall.Method), bytes.NewReader(nextBody))
+	req, _ := http.NewRequest("PUT", fmt.Sprintf(actorMethodURLFormat, nextCall.ActorType, nextCall.ActorID, nextCall.Method), bytes.NewReader(nextBody))
 
 	res, err := httpClient.Do(req)
 	if err != nil {
 		w.Write([]byte(err.Error()))
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(fasthttp.StatusInternalServerError)
 		return
 	}
 
@@ -182,7 +166,7 @@ func actorTestCallHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		w.Write([]byte(err.Error()))
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(fasthttp.StatusInternalServerError)
 		return
 	}
 
@@ -210,7 +194,7 @@ func reentrantCallHandler(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(fasthttp.StatusInternalServerError)
 		return
 	}
 
@@ -227,7 +211,7 @@ func reentrantCallHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Next call: %s on %s.%s", nextCall.Method, nextCall.ActorType, nextCall.ActorID)
 
 	url := fmt.Sprintf(actorMethodURLFormat, nextCall.ActorType, nextCall.ActorID, nextCall.Method)
-	req, _ := http.NewRequest(http.MethodPut, url, bytes.NewReader(nextBody))
+	req, _ := http.NewRequest("PUT", url, bytes.NewReader(nextBody))
 
 	reentrancyID := r.Header.Get("Dapr-Reentrancy-Id")
 	req.Header.Add("Dapr-Reentrancy-Id", reentrancyID)
@@ -235,8 +219,8 @@ func reentrantCallHandler(w http.ResponseWriter, r *http.Request) {
 	resp, err := httpClient.Do(req)
 
 	log.Printf("Call status: %d\n", resp.StatusCode)
-	if err != nil || resp.StatusCode == http.StatusInternalServerError {
-		w.WriteHeader(http.StatusInternalServerError)
+	if err != nil || resp.StatusCode == fasthttp.StatusInternalServerError {
+		w.WriteHeader(fasthttp.StatusInternalServerError)
 		appendLog(mux.Vars(r)["actorType"], mux.Vars(r)["id"], fmt.Sprintf("Error %s", mux.Vars(r)["method"]))
 	} else {
 		appendLog(mux.Vars(r)["actorType"], mux.Vars(r)["id"], fmt.Sprintf("Exit %s", mux.Vars(r)["method"]))
@@ -264,9 +248,6 @@ func advanceCallStackForNextRequest(req reentrantRequest) (actorCall, []byte) {
 func appRouter() *mux.Router {
 	router := mux.NewRouter().StrictSlash(true)
 
-	// Log requests and their processing time
-	router.Use(utils.LoggerMiddleware)
-
 	router.HandleFunc("/", indexHandler).Methods("GET")
 	router.HandleFunc("/dapr/config", configHandler).Methods("GET")
 
@@ -281,7 +262,23 @@ func appRouter() *mux.Router {
 	return router
 }
 
+func newHTTPClient() *http.Client {
+	dialer := &net.Dialer{ //nolint:exhaustivestruct
+		Timeout: 5 * time.Second,
+	}
+	netTransport := &http.Transport{ //nolint:exhaustivestruct
+		DialContext:         dialer.DialContext,
+		TLSHandshakeTimeout: 5 * time.Second,
+	}
+
+	return &http.Client{ //nolint:exhaustivestruct
+		Timeout:   30 * time.Second,
+		Transport: netTransport,
+	}
+}
+
 func main() {
 	log.Printf("Actor App - listening on http://localhost:%d", appPort)
-	utils.StartServer(appPort, appRouter, true, false)
+
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", appPort), appRouter()))
 }

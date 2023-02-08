@@ -1,3 +1,0 @@
-../utils/*.go
-../../../dapr/proto/runtime/v1/*.proto
-../../../dapr/proto/common/v1/*.proto

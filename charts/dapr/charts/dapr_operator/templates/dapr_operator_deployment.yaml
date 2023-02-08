@@ -13,9 +13,6 @@ metadata:
   name: dapr-webhook-cert
   labels:
     app: dapr-operator
-    {{- range $key, $value := .Values.global.k8sLabels }}
-    {{ $key }}: {{ tpl $value $ }}
-    {{- end }}
 data:
   {{ if $existingSecret }}tls.crt: {{ index $existingSecret.data "tls.crt" }}
   {{ else }}tls.crt: {{ b64enc $cert.Cert }}
@@ -31,9 +28,6 @@ metadata:
   name: dapr-webhook-ca
   labels:
     app: dapr-operator
-    {{- range $key, $value := .Values.global.k8sLabels }}
-    {{ $key }}: {{ tpl $value $ }}
-    {{- end }}
 data:
   {{ if $existingCA }}caBundle: {{ index $existingCA.data "caBundle" }}
   {{ else }}caBundle: {{ b64enc $ca.Cert }}
@@ -45,9 +39,6 @@ metadata:
   name: dapr-operator
   labels:
     app: dapr-operator
-    {{- range $key, $value := .Values.global.k8sLabels }}
-    {{ $key }}: {{ tpl $value $ }}
-    {{- end }}
 spec:
 {{- if eq .Values.global.ha.enabled true }}
   replicas: {{ .Values.global.ha.replicaCount }}
@@ -61,9 +52,11 @@ spec:
     metadata:
       labels:
         app: dapr-operator
-        {{- range $key, $value := .Values.global.k8sLabels }}
-        {{ $key }}: {{ tpl $value $ }}
-        {{- end }}
+        app.kubernetes.io/name: {{ .Release.Name }}
+        app.kubernetes.io/version: {{ .Values.global.tag }}
+        app.kubernetes.io/component: operator
+        app.kubernetes.io/part-of: "dapr"
+        app.kubernetes.io/managed-by: "helm"
         {{- with .Values.global.labels }}
           {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -74,6 +67,18 @@ spec:
         prometheus.io/path: "/"
 {{- end }}
     spec:
+{{- if eq .Values.global.ha.enabled true }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - dapr-operator
+            topologyKey: "kubernetes.io/hostname"
+{{- end }}
       containers:
       - name: dapr-operator
         livenessProbe:
@@ -81,27 +86,27 @@ spec:
             path: /healthz
             port: 8080
 {{- if eq .Values.debug.enabled false }}
-          initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+          initialDelaySeconds: 3
 {{- else }}
           initialDelaySeconds: {{ .Values.debug.initialDelaySeconds }}
 {{- end }}
-          periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
-          failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          periodSeconds: 3
+          failureThreshold: 5
         readinessProbe:
           httpGet:
             path: /healthz
             port: 8080
 {{- if eq .Values.debug.enabled false }}
-          initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+          initialDelaySeconds: 3
 {{- else }}
           initialDelaySeconds: {{ .Values.debug.initialDelaySeconds }}
 {{- end }}
-          periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
-          failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          periodSeconds: 3
+          failureThreshold: 5
 {{- if contains "/" .Values.image.name }}
         image: "{{ .Values.image.name }}"
 {{- else }}
-        image: "{{ .Values.global.registry }}/{{ .Values.image.name }}:{{ .Values.global.tag }}"
+        image: "{{ .Values.global.registry }}/dapr:{{ .Values.global.tag }}"
 {{- end }}
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
 {{- if eq .Values.global.daprControlPlaneOs "linux" }}
@@ -160,12 +165,8 @@ spec:
         - "/operator"
         - "--"
 {{- end }}
-        - "--watch-interval"
-        - "{{ .Values.watchInterval }}"
-        - "--max-pod-restarts-per-minute"
-        - "{{ .Values.maxPodRestartsPerMinute }}"
         - "--log-level"
-        - "{{ .Values.logLevel }}"
+        - {{ .Values.logLevel }}
 {{- if eq .Values.global.logAsJson true }}
         - "--log-as-json"
 {{- end }}
@@ -175,18 +176,6 @@ spec:
         - "{{ .Values.global.prometheus.port }}"
 {{- else }}
         - "--enable-metrics=false"
-{{- end }}
-{{- with .Values.global.issuerFilenames }}
-        - "--issuer-ca-filename"
-        - "{{ .ca }}"
-        - "--issuer-certificate-filename"
-        - "{{ .cert }}"
-        - "--issuer-key-filename"
-        - "{{ .key }}"
-{{- end }}
-{{- if .Values.watchNamespace }}
-        - "--watch-namespace"
-        - "{{ .Values.watchNamespace }}"
 {{- end }}
       serviceAccountName: dapr-operator
       volumes:
